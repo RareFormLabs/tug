@@ -1,0 +1,30 @@
+{
+  "name": "tug",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Craft CMS deployment and sync workflows in a Bun/OpenTUI CLI.",
+  "bin": {
+    "tug": "./src/cli/main.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/cli/main.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --deny-warnings .",
+    "test": "bun test",
+    "doctor": "bun run src/cli/main.ts doctor"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.1.87",
+    "citty": "^0.2.1",
+    "dotenv": "^17.3.1",
+    "es-toolkit": "^1.45.1",
+    "smol-toml": "^1.6.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "oxlint": "^1.55.0",
+    "typescript": "^5.9.3"
+  }
+}
