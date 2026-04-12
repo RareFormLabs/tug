@@ -1,0 +1,24 @@
+[project]
+name = "my-craft-site"
+disabled_tasks = []
+
+[remote]
+host = "example.com"
+user = "deploy"
+port = 22
+app_path = "/srv/users/deploy/apps/site/current"
+env_path = "/srv/users/deploy/apps/site/current/.env"
+
+[files]
+push = ["templates", "config", "web/dist"]
+pull = ["web/uploads"]
+exclude = [".DS_Store", ".git", ".env"]
+
+[database]
+engine = "mysql"
+local_env_file = ".env"
+remote_env_path = "/srv/users/deploy/apps/site/current/.env"
+backup_dir = ".tug/backups"
+
+[composer]
+enabled = true

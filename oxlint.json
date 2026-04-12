@@ -1,0 +1,8 @@
+{
+  "ignorePatterns": ["node_modules", ".tug"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "style": "warn"
+  }
+}
