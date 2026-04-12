@@ -1,5 +1,6 @@
 import type {
   BackupAction,
+  CommandSpec,
   LoadedRuntime,
   TaskPlan,
   TaskResult,
@@ -7,26 +8,46 @@ import type {
 import { listBackups, resolveRuntimePaths } from "../core/paths";
 import { ok } from "./shared";
 
+function getPlatformOpener(target: string): CommandSpec {
+  if (process.platform === "darwin") {
+    return {
+      command: "open",
+      args: [target],
+      stdout: "pipe",
+      stderr: "pipe",
+      display: `open ${target}`,
+    };
+  }
+  if (process.platform === "win32") {
+    return {
+      command: "cmd",
+      args: ["/c", "start", "", target],
+      stdout: "pipe",
+      stderr: "pipe",
+      display: `start ${target}`,
+    };
+  }
+  return {
+    command: "xdg-open",
+    args: [target],
+    stdout: "pipe",
+    stderr: "pipe",
+    display: `xdg-open ${target}`,
+  };
+}
+
 export async function plan(runtime: LoadedRuntime, action: BackupAction): Promise<TaskPlan> {
   const runtimePaths = resolveRuntimePaths(runtime.options.cwd, runtime.config);
   return {
     id: action === "list" ? "backups" : "backupsOpen",
     title: action === "list" ? "List backups" : "Open backups",
     summary:
-      action === "list" ? "Show available backup snapshots." : "Open the backup directory in Finder.",
+      action === "list" ? "Show available backup snapshots." : "Open the backup directory.",
     target: runtimePaths.backupRoot,
     destructive: false,
     commands:
       action === "open"
-        ? [
-            {
-              command: "open",
-              args: [runtimePaths.backupRoot],
-              stdout: "pipe",
-              stderr: "pipe",
-              display: `open ${runtimePaths.backupRoot}`,
-            },
-          ]
+        ? [getPlatformOpener(runtimePaths.backupRoot)]
         : [],
   };
 }

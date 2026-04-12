@@ -1,5 +1,6 @@
 import path from "node:path";
 import dotenv from "dotenv";
+import { shellQuote } from "./shell";
 import type {
   DatabaseCredentials,
   DatabaseEngine,
@@ -24,7 +25,13 @@ function normalizeEngine(engine: string | undefined): DatabaseEngine | null {
 }
 
 function parseDatabaseUrl(urlString: string): DatabaseCredentials {
-  const url = new URL(urlString);
+  let url: URL;
+  try {
+    url = new URL(urlString);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid DATABASE_URL: ${message}`);
+  }
   const engine = normalizeEngine(url.protocol.replace(":", ""));
   if (!engine) {
     throw new Error(`Unsupported DATABASE_URL protocol: ${url.protocol}`);
@@ -108,18 +115,25 @@ export async function fetchRemoteEnv(
   config: TugConfig,
   runner: ProcessRunner,
 ): Promise<Record<string, string | undefined>> {
+  const remoteEnvPath = config.database.remote_env_path || config.remote.env_path;
   const result = await runner.run({
     command: "ssh",
     args: [
       "-p",
       String(config.remote.port),
       `${config.remote.user}@${config.remote.host}`,
-      `cat ${config.database.remote_env_path || config.remote.env_path}`,
+      `cat ${shellQuote(remoteEnvPath)}`,
     ],
     stdout: "pipe",
     stderr: "pipe",
-    display: `ssh ${config.remote.user}@${config.remote.host} cat ${config.database.remote_env_path}`,
+    allowFailure: true,
+    display: `ssh ${config.remote.user}@${config.remote.host} cat ${remoteEnvPath}`,
   });
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Failed to read remote env file at ${remoteEnvPath}: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`,
+    );
+  }
   return dotenv.parse(result.stdout);
 }
 

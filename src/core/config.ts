@@ -78,16 +78,48 @@ export async function readConfig(cwd: string, explicitPath?: string): Promise<Tu
   return configSchema.parse(parsed);
 }
 
-export async function writeInitialConfig(cwd: string, explicitPath?: string): Promise<string> {
+export async function writeInitialConfig(
+  cwd: string,
+  explicitPath?: string,
+  force = false,
+): Promise<string> {
   const destination = resolveConfigPath(cwd, explicitPath);
+  if (!force) {
+    await access(destination)
+      .then(() => {
+        throw new Error(`Refusing to overwrite ${destination}. Re-run with --force to replace it.`);
+      })
+      .catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+          throw error;
+        }
+      });
+  }
   await writeFile(destination, renderExampleConfig(), "utf8");
   const exampleEnvSource = path.resolve(cwd, ".env.example");
-  const exampleEnvTarget = path.resolve(cwd, ".env.sample");
+  const exampleEnvTarget = path.resolve(cwd, ".env");
   try {
     await access(exampleEnvSource);
+    if (!force) {
+      await access(exampleEnvTarget)
+        .then(() => undefined)
+        .catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+            throw error;
+          }
+        });
+      try {
+        await access(exampleEnvTarget);
+        return destination;
+      } catch {
+        // .env does not exist yet, continue.
+      }
+    }
     await copyFile(exampleEnvSource, exampleEnvTarget);
-  } catch {
-    // No-op when the user already has local env files.
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+      throw error;
+    }
   }
   return destination;
 }

@@ -28,7 +28,20 @@ const main = defineCommand({
     backups: backupsCommand,
   },
   async run(context) {
-    const hasSubcommand = context.rawArgs.some((arg) => !arg.startsWith("-"));
+    const knownSubcommands = new Set([
+      "init",
+      "doctor",
+      "folder",
+      "db",
+      "composer",
+      "shell",
+      "backups",
+    ]);
+    const firstPositional = Array.isArray(context.args._)
+      ? context.args._.find((value: unknown) => typeof value === "string")
+      : undefined;
+    const hasSubcommand =
+      typeof firstPositional === "string" && knownSubcommands.has(firstPositional);
     if (hasSubcommand) {
       return;
     }

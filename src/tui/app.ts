@@ -276,9 +276,15 @@ export async function startTui(options: RuntimeOptions): Promise<void> {
 
     if (task.descriptor.id === "terminal") {
       renderer.destroy();
-      const result = await task.execute(runtime);
-      console.log(result.summary);
-      process.exitCode = 0;
+      try {
+        const result = await task.execute(runtime);
+        console.log(result.summary);
+        process.exitCode = 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.stack ?? error.message : String(error);
+        console.error(message);
+        process.exitCode = 1;
+      }
       return;
     }
 

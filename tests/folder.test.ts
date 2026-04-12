@@ -38,8 +38,8 @@ describe("folder commands", () => {
   test("builds pull commands without delete", () => {
     const runtime = createRuntime("/tmp/project", config, new MockRunner(), { dryRun: true });
     const commands = buildFolderPullCommands(runtime);
-    expect(commands[0]?.command).toBe("mkdir");
-    expect(commands[1]?.args).not.toContain("--delete");
-    expect(commands[1]?.args).toContain("--dry-run");
+    expect(commands[0]?.command).toBe("rsync");
+    expect(commands[0]?.args).not.toContain("--delete");
+    expect(commands[0]?.args).toContain("--dry-run");
   });
 });

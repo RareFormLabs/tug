@@ -1,5 +1,5 @@
 import path from "node:path";
-import { copyFile, mkdir } from "node:fs/promises";
+import { copyFile } from "node:fs/promises";
 import type {
   CommandSpec,
   ComposerAction,
@@ -8,6 +8,7 @@ import type {
   TaskResult,
 } from "../types";
 import { createBackupSession } from "../core/paths";
+import { shellQuote } from "../core/shell";
 import { ensureComposerEnabled, ensureForceForDestructive, executePlan, fileExists, ok } from "./shared";
 
 const composerFiles = ["composer.json", "composer.lock"] as const;
@@ -27,7 +28,7 @@ function buildRemotePullCommands(runtime: LoadedRuntime): CommandSpec[] {
     args: [
       "--archive",
       `--rsh=ssh -p ${runtime.config.remote.port}`,
-      `${runtime.config.remote.user}@${runtime.config.remote.host}:${path.posix.join(runtime.config.remote.app_path, file)}`,
+      `${runtime.config.remote.user}@${runtime.config.remote.host}:${shellQuote(path.posix.join(runtime.config.remote.app_path, file))}`,
       path.resolve(runtime.options.cwd, file),
     ],
     stdout: "pipe",
@@ -43,7 +44,7 @@ function buildRemoteBackupCommands(runtime: LoadedRuntime, backupDir: string): C
     args: [
       "--archive",
       `--rsh=ssh -p ${runtime.config.remote.port}`,
-      `${runtime.config.remote.user}@${runtime.config.remote.host}:${path.posix.join(runtime.config.remote.app_path, file)}`,
+      `${runtime.config.remote.user}@${runtime.config.remote.host}:${shellQuote(path.posix.join(runtime.config.remote.app_path, file))}`,
       path.resolve(backupDir, `remote-${file}`),
     ],
     stdout: "pipe",
@@ -60,7 +61,7 @@ function buildRemotePushCommands(runtime: LoadedRuntime): CommandSpec[] {
       "--archive",
       `--rsh=ssh -p ${runtime.config.remote.port}`,
       path.resolve(runtime.options.cwd, file),
-      `${runtime.config.remote.user}@${runtime.config.remote.host}:${path.posix.join(runtime.config.remote.app_path, file)}`,
+      `${runtime.config.remote.user}@${runtime.config.remote.host}:${shellQuote(path.posix.join(runtime.config.remote.app_path, file))}`,
     ],
     stdout: "pipe",
     stderr: "pipe",
@@ -69,14 +70,19 @@ function buildRemotePushCommands(runtime: LoadedRuntime): CommandSpec[] {
   }));
 }
 
-export async function plan(runtime: LoadedRuntime, action: ComposerAction): Promise<TaskPlan> {
+export async function plan(
+  runtime: LoadedRuntime,
+  action: ComposerAction,
+  backupDir?: string,
+): Promise<TaskPlan> {
   ensureComposerEnabled(runtime.config);
-  const session = await createBackupSession(runtime.options.cwd, runtime.config);
-  await mkdir(session.backupDir, { recursive: true });
   const commands =
     action === "pull"
       ? buildRemotePullCommands(runtime)
-      : [...buildRemoteBackupCommands(runtime, session.backupDir), ...buildRemotePushCommands(runtime)];
+      : [
+          ...(backupDir ? buildRemoteBackupCommands(runtime, backupDir) : []),
+          ...buildRemotePushCommands(runtime),
+        ];
 
   return {
     id: action === "pull" ? "composerPull" : "composerPush",
@@ -98,9 +104,12 @@ export async function confirmMessage(runtime: LoadedRuntime, action: ComposerAct
 }
 
 export async function run(runtime: LoadedRuntime, action: ComposerAction): Promise<TaskResult> {
-  const taskPlan = await plan(runtime, action);
-  ensureForceForDestructive(runtime, taskPlan);
+  if (!runtime.options.force) {
+    throw new Error("Composer sync is destructive. Re-run with --force or use the interactive TUI.");
+  }
   const session = await createBackupSession(runtime.options.cwd, runtime.config);
+  const taskPlan = await plan(runtime, action, session.backupDir);
+  ensureForceForDestructive(runtime, taskPlan);
   if (action === "pull") {
     await backupLocalComposerFiles(runtime, session.backupDir);
   } else {

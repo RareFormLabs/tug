@@ -114,16 +114,16 @@ describe("database orchestration", () => {
         };
       }
       if (spec.command === "/usr/bin/env" && spec.args?.[0] === "which") {
-        if (spec.args[1] === "mysqldump") {
+        if (spec.args[1] === "mysql") {
           return { exitCode: 1, stdout: "", stderr: "" };
         }
-        return { exitCode: 0, stdout: "/usr/bin/mysql\n", stderr: "" };
+        return { exitCode: 0, stdout: `/usr/bin/${spec.args[1]}\n`, stderr: "" };
       }
       return { exitCode: 0, stdout: "", stderr: "" };
     });
     const runtime = createRuntime(cwd, createConfig("mysql"), runner);
     await expect(buildDatabaseCommands(runtime, "pull")).rejects.toThrow(
-      "Local database prerequisite missing: mysqldump is not installed or not on PATH.",
+      "Local database prerequisite missing: mysql is not installed or not on PATH.",
     );
   });
 

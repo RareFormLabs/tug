@@ -1,7 +1,9 @@
 import type { CommandSpec, LoadedRuntime, TaskPlan, TaskResult } from "../types";
+import { shellQuote } from "../core/shell";
 import { executePlan, ok } from "./shared";
 
 export function buildShellCommand(runtime: LoadedRuntime): CommandSpec {
+  const remoteAppPath = shellQuote(runtime.config.remote.app_path);
   return {
     command: "ssh",
     args: [
@@ -9,7 +11,7 @@ export function buildShellCommand(runtime: LoadedRuntime): CommandSpec {
       "-p",
       String(runtime.config.remote.port),
       `${runtime.config.remote.user}@${runtime.config.remote.host}`,
-      `cd ${runtime.config.remote.app_path} && exec $SHELL -l`,
+      `cd ${remoteAppPath} && exec $SHELL -l`,
     ],
     stdin: "inherit",
     stdout: "inherit",

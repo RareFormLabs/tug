@@ -10,7 +10,11 @@ export const initCommand = defineCommand({
   args: sharedArgs,
   async run(context) {
     const options = optionsFromArgs(context.args);
-    const filePath = await writeInitialConfig(options.cwd, options.configPath);
+    const filePath = await writeInitialConfig(
+      options.cwd,
+      options.configPath,
+      options.force,
+    );
     console.log(`Created ${filePath}`);
   },
 });

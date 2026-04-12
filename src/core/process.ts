@@ -35,8 +35,9 @@ async function readStream(
 
 export class BunProcessRunner implements ProcessRunner {
   async run(spec: CommandSpec, hooks: CommandHooks = {}): Promise<CommandResult> {
+    const selectedShell = process.env.SHELL ?? "/bin/sh";
     const command = spec.shell
-      ? ["/bin/zsh", "-lc", spec.command]
+      ? [selectedShell, "-lc", spec.command]
       : [spec.command, ...(spec.args ?? [])];
     const stdinMode =
       typeof spec.stdin === "string" && spec.stdin !== "inherit" && spec.stdin !== "pipe"

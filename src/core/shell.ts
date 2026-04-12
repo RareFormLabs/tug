@@ -3,5 +3,5 @@ export function shellQuote(value: string): string {
 }
 
 export function joinCommand(parts: string[]): string {
-  return parts.join(" ");
+  return parts.map(shellQuote).join(" ");
 }

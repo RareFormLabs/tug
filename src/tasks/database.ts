@@ -112,6 +112,13 @@ function postgresClearSpec(credentials: DatabaseCredentials, label: string): Com
   };
 }
 
+function specToShellCommand(spec: CommandSpec): string {
+  if (spec.shell) {
+    return spec.command;
+  }
+  return [spec.command, ...((spec.args ?? []).map(shellQuote))].join(" ");
+}
+
 function dumpSpec(engine: DatabaseEngine, credentials: DatabaseCredentials, outputPath: string, label: string): CommandSpec {
   return engine === "mysql"
     ? mysqlDumpSpec(credentials, outputPath, label)
@@ -146,6 +153,7 @@ function sshCommand(runtime: LoadedRuntime, remoteScript: string, env?: Record<s
     ],
     stdout: "pipe",
     stderr: "pipe",
+    display: `ssh ${runtime.config.remote.user}@${runtime.config.remote.host}`,
   };
 }
 
@@ -218,13 +226,13 @@ function toolsFor(
 ): string[] {
   if (engine === "mysql") {
     if (side === "local") {
-      return action === "pull" ? ["mysqldump", "mysql"] : ["mysqldump"];
+      return action === "pull" ? ["mysql"] : ["mysqldump"];
     }
     return action === "pull" ? ["mysqldump"] : ["mysqldump", "mysql"];
   }
 
   if (side === "local") {
-    return action === "pull" ? ["pg_dump", "psql"] : ["pg_dump"];
+    return action === "pull" ? ["psql"] : ["pg_dump"];
   }
   return action === "pull" ? ["pg_dump"] : ["pg_dump", "psql"];
 }
@@ -259,7 +267,6 @@ export async function buildDatabaseCommands(
   const taskId = action === "push" ? "databasePush" : "databasePull";
   ensureTaskEnabled(runtime.config, taskId);
 
-  const session = await createBackupSession(runtime.options.cwd, runtime.config);
   const localCreds = await resolveLocalDatabaseCredentials(
     runtime.options.cwd,
     runtime.config,
@@ -267,6 +274,7 @@ export async function buildDatabaseCommands(
   );
   const remoteCreds = await resolveRemoteDatabaseCredentials(runtime.config, runtime.runner);
   await assertDatabasePrereqs(runtime, localCreds.engine, remoteCreds.engine, action);
+  const session = await createBackupSession(runtime.options.cwd, runtime.config);
   const localBackup = path.resolve(session.backupDir, `local-${action === "push" ? "before-push" : "before-pull"}.sql.gz`);
   const remoteBackup = path.resolve(session.backupDir, `remote-${action === "push" ? "before-push" : "source"}.sql.gz`);
   const localTemp = path.resolve(session.tempDir, `${action}.sql.gz`);
@@ -307,16 +315,12 @@ export async function buildDatabaseCommands(
           rsyncCopyToRemote(runtime, localTemp, remoteTemp, "upload local database dump"),
           sshCommand(
             runtime,
-            `${clearSpec(remoteCreds.engine, remoteCreds, "clear remote database").command} ${(
-              clearSpec(remoteCreds.engine, remoteCreds, "clear remote database").args ?? []
-            )
-              .map(shellQuote)
-              .join(" ")}`,
+            specToShellCommand(clearSpec(remoteCreds.engine, remoteCreds, "clear remote database")),
             remoteCreds.engine === "mysql" ? mysqlEnv(remoteCreds.password) : postgresEnv(remoteCreds.password),
           ),
           sshCommand(
             runtime,
-            importSpec(remoteCreds.engine, remoteCreds, remoteTemp, "import remote database").command,
+            specToShellCommand(importSpec(remoteCreds.engine, remoteCreds, remoteTemp, "import remote database")),
             remoteCreds.engine === "mysql" ? mysqlEnv(remoteCreds.password) : postgresEnv(remoteCreds.password),
           ),
           sshCommand(runtime, `rm -f ${shellQuote(remoteTemp)}`),
@@ -403,8 +407,8 @@ export async function doctor(runtime: LoadedRuntime): Promise<DatabaseDoctorRepo
   }
 
   const engine = localCredentials?.engine ?? remoteCredentials?.engine ?? runtime.config.database.engine;
-  const localTools = toolsFor(engine, "local", "pull");
-  const remoteTools = toolsFor(engine, "remote", "push");
+  const localTools = engine === "mysql" ? ["mysqldump", "mysql"] : ["pg_dump", "psql"];
+  const remoteTools = engine === "mysql" ? ["mysqldump", "mysql"] : ["pg_dump", "psql"];
 
   for (const tool of localTools) {
     const exists = await commandExists(runtime.runner, tool);

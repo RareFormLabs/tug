@@ -15,43 +15,53 @@ function resultFromChecks(checks: DoctorCheck[]): DoctorReport {
   };
 }
 
+function databaseTools(engine: "mysql" | "postgres"): string[] {
+  return engine === "mysql" ? ["mysql", "mysqldump"] : ["psql", "pg_dump"];
+}
+
 function requiredTools(config: TugConfig | null): string[] {
   const tools = ["ssh", "rsync", "gzip"];
-  if (config?.database.engine === "mysql") {
-    tools.push("mysql", "mysqldump");
-  }
-  if (config?.database.engine === "postgres") {
-    tools.push("psql", "pg_dump");
+  if (config) {
+    tools.push(...databaseTools(config.database.engine));
   }
   return tools;
 }
 
+// SSH can connect successfully yet stall on the remote command; cap the probe and
+// treat timeout the same as "tool not available" so doctor stays responsive.
 async function remoteToolExists(
   runner: ProcessRunner,
   config: TugConfig,
   tool: string,
 ): Promise<boolean> {
   try {
-    const result = await runner.run({
-      command: "ssh",
-      args: [
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=2",
-        "-o",
-        "NumberOfPasswordPrompts=0",
-        "-o",
-        "PreferredAuthentications=publickey",
-        "-p",
-        String(config.remote.port),
-        `${config.remote.user}@${config.remote.host}`,
-        `command -v ${tool} >/dev/null 2>&1`,
-      ],
-      stdout: "pipe",
-      stderr: "pipe",
-      allowFailure: true,
-    });
+    const result = await Promise.race([
+      runner.run({
+        command: "ssh",
+        args: [
+          "-o",
+          "BatchMode=yes",
+          "-o",
+          "ConnectTimeout=2",
+          "-o",
+          "NumberOfPasswordPrompts=0",
+          "-o",
+          "PreferredAuthentications=publickey",
+          "-p",
+          String(config.remote.port),
+          `${config.remote.user}@${config.remote.host}`,
+          `command -v ${tool} >/dev/null 2>&1`,
+        ],
+        stdout: "pipe",
+        stderr: "pipe",
+        allowFailure: true,
+      }),
+      new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
+        setTimeout(() => {
+          resolve({ exitCode: 124, stdout: "", stderr: "Timed out checking remote tool." });
+        }, 3000);
+      }),
+    ]);
     return result.exitCode === 0;
   } catch {
     return false;
@@ -136,8 +146,7 @@ export async function inspectProject(
       message: `SSH connectivity to ${config.remote.host} succeeded.`,
     });
 
-    const remoteTools =
-      config.database.engine === "mysql" ? ["mysqldump", "mysql"] : ["pg_dump", "psql"];
+    const remoteTools = databaseTools(config.database.engine);
     for (const tool of remoteTools) {
       const exists = await remoteToolExists(runner, config, tool);
       addCheck({
@@ -153,7 +162,7 @@ export async function inspectProject(
     addCheck({
       id: "ssh-reachability",
       label: "SSH reachability",
-      status: "warn",
+      status: "fail",
       message:
         error instanceof Error
           ? error.message

@@ -5,8 +5,8 @@ describe("process runner", () => {
   test("merges custom env with PATH for spawned commands", async () => {
     const runner = new BunProcessRunner();
     const result = await runner.run({
-      command: "which",
-      args: ["ls"],
+      command: process.env.SHELL ?? "/bin/sh",
+      args: ["-lc", "printf '%s\n' \"$TUG_TEST_ENV\" && which ls"],
       env: {
         TUG_TEST_ENV: "1",
       },
@@ -15,6 +15,7 @@ describe("process runner", () => {
     });
 
     expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("1");
     expect(result.stdout.trim().length).toBeGreaterThan(0);
   });
 });
