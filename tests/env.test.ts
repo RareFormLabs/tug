@@ -76,4 +76,26 @@ describe("env resolution", () => {
     expect(credentials.host).toBe("db.internal");
     expect(credentials.database).toBe("craftdb");
   });
+
+  test("maps container host aliases for local macOS database clients", async () => {
+    const cwd = await createTempProject();
+    tempDirs.push(cwd);
+    await writeProjectFile(
+      cwd,
+      ".env",
+      'DB_DRIVER="mysql"\nDB_SERVER="host.containers.internal"\nDB_DATABASE="craft"\nDB_USER="root"\n',
+    );
+    const credentials = await resolveLocalDatabaseCredentials(cwd, config, {
+      cwd,
+      force: false,
+      dryRun: false,
+      verbose: false,
+      json: false,
+      interactive: false,
+    });
+
+    expect(credentials.host).toBe(
+      process.platform === "darwin" ? "127.0.0.1" : "host.containers.internal",
+    );
+  });
 });

@@ -9,6 +9,27 @@ import type {
   TugConfig,
 } from "../types";
 
+const hostContainerAliases: Record<string, string> = {
+  "host.containers.internal": "127.0.0.1",
+  "host.docker.internal": "127.0.0.1",
+};
+
+export function resolveLocalDatabaseHost(host: string): string {
+  if (process.platform !== "darwin") {
+    return host;
+  }
+
+  const normalizedHost = host.toLowerCase().replace(/\.$/, "");
+  return hostContainerAliases[normalizedHost] ?? host;
+}
+
+function normalizeLocalDatabaseCredentials(
+  credentials: DatabaseCredentials,
+): DatabaseCredentials {
+  const host = resolveLocalDatabaseHost(credentials.host);
+  return host === credentials.host ? credentials : { ...credentials, host };
+}
+
 function normalizeEngine(engine: string | undefined): DatabaseEngine | null {
   if (!engine) {
     return null;
@@ -95,19 +116,21 @@ export async function resolveLocalDatabaseCredentials(
   const localEnv = await readLocalEnv(cwd, config, options);
   const urlValue = process.env.DATABASE_URL ?? localEnv.DATABASE_URL;
   if (urlValue) {
-    return parseDatabaseUrl(urlValue);
+    return normalizeLocalDatabaseCredentials(parseDatabaseUrl(urlValue));
   }
 
-  return parseCraftStyleEnv(
-    {
-      DB_DRIVER: process.env.DB_DRIVER ?? localEnv.DB_DRIVER,
-      DB_SERVER: process.env.DB_SERVER ?? localEnv.DB_SERVER,
-      DB_PORT: process.env.DB_PORT ?? localEnv.DB_PORT,
-      DB_DATABASE: process.env.DB_DATABASE ?? localEnv.DB_DATABASE,
-      DB_USER: process.env.DB_USER ?? localEnv.DB_USER,
-      DB_PASSWORD: process.env.DB_PASSWORD ?? localEnv.DB_PASSWORD,
-    },
-    config.database.engine,
+  return normalizeLocalDatabaseCredentials(
+    parseCraftStyleEnv(
+      {
+        DB_DRIVER: process.env.DB_DRIVER ?? localEnv.DB_DRIVER,
+        DB_SERVER: process.env.DB_SERVER ?? localEnv.DB_SERVER,
+        DB_PORT: process.env.DB_PORT ?? localEnv.DB_PORT,
+        DB_DATABASE: process.env.DB_DATABASE ?? localEnv.DB_DATABASE,
+        DB_USER: process.env.DB_USER ?? localEnv.DB_USER,
+        DB_PASSWORD: process.env.DB_PASSWORD ?? localEnv.DB_PASSWORD,
+      },
+      config.database.engine,
+    ),
   );
 }
 

@@ -14,6 +14,11 @@
   - `mysql` and `mysqldump` for MySQL/MariaDB projects
   - `psql` and `pg_dump` for Postgres projects
 
+When Tug runs on macOS, local database credentials using `host.containers.internal`
+or `host.docker.internal` are translated to `127.0.0.1` for the host-side
+`mysql`, `mysqldump`, `psql`, and `pg_dump` commands. The project `.env` and
+remote database credentials are not modified.
+
 ## Install
 
 ```bash
