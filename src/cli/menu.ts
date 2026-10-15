@@ -2,6 +2,7 @@ import { styleText } from "node:util";
 import { confirm, intro, isCancel, log, outro, select } from "@clack/prompts";
 import { findConfigPath, listBackups } from "../core/paths";
 import { createLoadedRuntime } from "../core/runtime";
+import { playSound } from "../core/sound";
 import * as backupsTask from "../tasks/backups";
 import * as composerTask from "../tasks/composer";
 import * as databaseTask from "../tasks/database";
@@ -9,7 +10,7 @@ import * as folderTask from "../tasks/folder";
 import * as shellTask from "../tasks/shell";
 import type { LoadedRuntime, RuntimeOptions } from "../types";
 import { backupsFlow, doctorFlow, initWizard } from "./flows";
-import { PromptCancelled, errorMessage, runPrepared, ui } from "./ui";
+import { PromptCancelled, errorMessage, runPrepared, ui, withEmoji } from "./ui";
 
 interface MenuItem {
   /** Matches the ids accepted by `project.disabled_tasks`. */
@@ -30,25 +31,18 @@ function menuItems(runtime: LoadedRuntime, backupHint: string): MenuItem[] {
 
   const items: MenuItem[] = [
     {
-      id: "folderPull",
-      label: "Pull folders",
-      hint: `${config.files.pull.join(", ") || "none configured"} from ${host}`,
-      enabled: config.files.pull.length > 0,
-      run: () => prepared(() => folderTask.prepare(runtime, "pull")),
-    },
-    {
-      id: "folderPush",
-      label: "Push folders",
-      hint: `${config.files.push.join(", ") || "none configured"} to ${host}, previewed first`,
-      enabled: config.files.push.length > 0,
-      run: () => prepared(() => folderTask.prepare(runtime, "push", { preview: true })),
-    },
-    {
       id: "databasePull",
       label: "Pull database",
       hint: "replace local with remote, backed up first",
       enabled: true,
       run: () => prepared(() => databaseTask.prepare(runtime, "pull")),
+    },
+    {
+      id: "folderPull",
+      label: "Pull folders",
+      hint: `${config.files.pull.join(", ") || "none configured"} from ${host}`,
+      enabled: config.files.pull.length > 0,
+      run: () => prepared(() => folderTask.prepare(runtime, "pull")),
     },
     {
       id: "databasePush",
@@ -58,17 +52,24 @@ function menuItems(runtime: LoadedRuntime, backupHint: string): MenuItem[] {
       run: () => prepared(() => databaseTask.prepare(runtime, "push")),
     },
     {
+      id: "folderPush",
+      label: "Push folders",
+      hint: `${config.files.push.join(", ") || "none configured"} to ${host}, previewed first`,
+      enabled: config.files.push.length > 0,
+      run: () => prepared(() => folderTask.prepare(runtime, "push", { preview: true })),
+    },
+    {
       id: "composerPull",
       label: "Pull composer files",
       hint: `composer.json and composer.lock from ${host}`,
-      enabled: config.composer.enabled,
+      enabled: composerTask.COMPOSER_TASKS_AVAILABLE && config.composer.enabled,
       run: () => prepared(() => composerTask.prepare(runtime, "pull")),
     },
     {
       id: "composerPush",
       label: "Push composer files",
       hint: `composer.json and composer.lock to ${host}`,
-      enabled: config.composer.enabled,
+      enabled: composerTask.COMPOSER_TASKS_AVAILABLE && config.composer.enabled,
       run: () => prepared(() => composerTask.prepare(runtime, "push")),
     },
     {
@@ -77,8 +78,9 @@ function menuItems(runtime: LoadedRuntime, backupHint: string): MenuItem[] {
       hint: `ssh into ${config.remote.app_path}`,
       enabled: true,
       run: async () => {
-        log.step(`Connecting to ${config.remote.user}@${host}. Type exit to come back.`);
-        ui.success((await shellTask.run(runtime)).summary);
+        ui.info(`Connecting to ${config.remote.user}@${host}. Type exit to come back.`);
+        await shellTask.run(runtime);
+        ui.info("Your SSH connection ended.");
       },
     },
     {
@@ -135,6 +137,7 @@ export async function startInteractive(options: RuntimeOptions): Promise<void> {
 
   const runtime = await createLoadedRuntime(options);
   const { config } = runtime;
+  playSound("start");
   log.message(
     [
       styleText("bold", config.project.name ?? "Project"),
@@ -150,9 +153,9 @@ export async function startInteractive(options: RuntimeOptions): Promise<void> {
       initialValue: last,
       maxItems: 12,
       options: [
-        ...items.map((item) => ({ value: item.id, label: item.label, hint: item.hint })),
-        { value: "doctor", label: "Doctor", hint: "check tools, SSH, and database settings" },
-        { value: "quit", label: "Quit" },
+        ...items.map((item) => ({ value: item.id, label: withEmoji(item.id, item.label), hint: item.hint })),
+        { value: "doctor", label: withEmoji("doctor", "Doctor"), hint: "check tools, SSH, and database settings" },
+        { value: "quit", label: withEmoji("quit", "Quit") },
       ],
     });
     if (isCancel(choice) || choice === "quit") {
@@ -168,9 +171,11 @@ export async function startInteractive(options: RuntimeOptions): Promise<void> {
       }
     } catch (error) {
       if (error instanceof PromptCancelled) {
-        ui.warn("Cancelled. Nothing was changed.");
+        ui.info("Cancelled. Nothing was changed.");
+        playSound("message");
       } else {
         ui.error(errorMessage(error));
+        playSound("error");
       }
     }
   }

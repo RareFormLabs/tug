@@ -1,19 +1,13 @@
 import { styleText } from "node:util";
 import { log, spinner } from "@clack/prompts";
-import type { Reporter } from "../types";
+import { formatDuration, formatSize } from "./format";
+import type { Reporter, StepContext, StepProgress } from "../types";
 
 const DEFAULT_OUTPUT_LIMIT = 20;
+const BAR_WIDTH = 24;
+const REDRAW_INTERVAL_MS = 100;
 
-export function formatDuration(ms: number): string {
-  if (ms < 1000) {
-    return `${ms}ms`;
-  }
-  const seconds = ms / 1000;
-  if (seconds < 60) {
-    return `${seconds.toFixed(1)}s`;
-  }
-  return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
-}
+export { formatDuration };
 
 function truncate(text: string, width: number): string {
   if (width <= 1) {
@@ -22,28 +16,77 @@ function truncate(text: string, width: number): string {
   return text.length > width ? `${text.slice(0, width - 1)}…` : text;
 }
 
+function formatAmount(value: number, unit: StepProgress["unit"]): string {
+  return unit === "bytes" ? formatSize(value) : `${value} file${value === 1 ? "" : "s"}`;
+}
+
 /**
- * Terminal reporter: a spinner per step (showing the latest output line), then
- * the step's output once it finishes. Long output is capped unless verbose.
+ * `━━━━━━━━━━──────────────  42%  12.3 MB / 29.0 MB`, or just the running amount
+ * when the total isn't known.
+ */
+export function renderProgress(progress: StepProgress): string {
+  if (!progress.total) {
+    return formatAmount(progress.done, progress.unit);
+  }
+  const ratio = Math.min(1, progress.done / progress.total);
+  const filled = Math.round(ratio * BAR_WIDTH);
+  const bar = `${styleText("cyan", "━".repeat(filled))}${styleText("dim", "─".repeat(BAR_WIDTH - filled))}`;
+  const percent = `${Math.floor(ratio * 100)}%`.padStart(4);
+  const amount =
+    progress.unit === "bytes"
+      ? `${formatSize(progress.done)} / ${formatSize(progress.total)}`
+      : `${progress.done} / ${progress.total} files`;
+  return `${bar} ${percent}  ${styleText("dim", amount)}`;
+}
+
+/**
+ * Terminal reporter: a spinner per step that shows a progress bar when the step
+ * reports progress (or its latest output line otherwise), then the step's output
+ * once it finishes. Long output is capped unless verbose.
  */
 export class TerminalReporter implements Reporter {
   constructor(private readonly verbose: boolean) {}
 
-  async step<T>(label: string, work: (onLine: (line: string) => void) => Promise<T>): Promise<T> {
+  async step<T>(label: string, work: (context: StepContext) => Promise<T>): Promise<T> {
     const lines: string[] = [];
-    const progress = spinner({ indicator: "timer" });
-    progress.start(label);
-    try {
-      const result = await work((line) => {
-        lines.push(line);
+    const indicator = spinner({ indicator: "timer" });
+    let latestLine = "";
+    let latestProgress: StepProgress | null = null;
+    let lastDraw = 0;
+
+    const redraw = (): void => {
+      const now = Date.now();
+      if (now - lastDraw < REDRAW_INTERVAL_MS) {
+        return;
+      }
+      lastDraw = now;
+      if (latestProgress) {
+        indicator.message(`${label}  ${renderProgress(latestProgress)}`);
+      } else if (latestLine) {
         const room = (process.stdout.columns ?? 80) - label.length - 16;
-        progress.message(`${label}  ${styleText("dim", truncate(line, room))}`);
+        indicator.message(`${label}  ${styleText("dim", truncate(latestLine, room))}`);
+      }
+    };
+
+    indicator.start(label);
+    try {
+      const result = await work({
+        line: (text) => {
+          lines.push(text);
+          latestLine = text;
+          redraw();
+        },
+        progress: (progress) => {
+          latestProgress = progress;
+          redraw();
+        },
       });
-      progress.stop(label);
+      const finished = latestProgress as StepProgress | null;
+      indicator.stop(finished ? `${label}  ${styleText("dim", formatAmount(finished.done, finished.unit))}` : label);
       this.printOutput(lines);
       return result;
     } catch (error) {
-      progress.error(label);
+      indicator.error(label);
       throw error;
     }
   }
@@ -64,12 +107,20 @@ export class TerminalReporter implements Reporter {
 
 /** Plain line-oriented reporter for pipes and CI logs. */
 export class PlainReporter implements Reporter {
-  async step<T>(label: string, work: (onLine: (line: string) => void) => Promise<T>): Promise<T> {
+  async step<T>(label: string, work: (context: StepContext) => Promise<T>): Promise<T> {
     const started = Date.now();
+    let latestProgress: StepProgress | null = null;
     console.log(`→ ${label}`);
     try {
-      const result = await work((line) => console.log(`  ${line}`));
-      console.log(`✓ ${label} (${formatDuration(Date.now() - started)})`);
+      const result = await work({
+        line: (text) => console.log(`  ${text}`),
+        progress: (progress) => {
+          latestProgress = progress;
+        },
+      });
+      const finished = latestProgress as StepProgress | null;
+      const amount = finished ? `, ${formatAmount(finished.done, finished.unit)}` : "";
+      console.log(`✓ ${label} (${formatDuration(Date.now() - started)}${amount})`);
       return result;
     } catch (error) {
       console.log(`✗ ${label}`);
@@ -78,14 +129,18 @@ export class PlainReporter implements Reporter {
   }
 }
 
-/** Collects step labels and output in memory. Used by tests. */
+/** Collects step labels, output, and progress in memory. Used by tests. */
 export class MemoryReporter implements Reporter {
   readonly steps: string[] = [];
   readonly lines: string[] = [];
+  readonly progress: StepProgress[] = [];
 
-  async step<T>(label: string, work: (onLine: (line: string) => void) => Promise<T>): Promise<T> {
+  async step<T>(label: string, work: (context: StepContext) => Promise<T>): Promise<T> {
     this.steps.push(label);
-    return work((line) => this.lines.push(line));
+    return work({
+      line: (text) => this.lines.push(text),
+      progress: (progress) => this.progress.push(progress),
+    });
   }
 }
 

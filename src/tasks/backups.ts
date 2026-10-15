@@ -1,7 +1,10 @@
 import path from "node:path";
 import type { BackupAction, CommandSpec, LoadedRuntime, TaskResult } from "../types";
 import { type BackupSnapshot, listBackups, resolveRuntimePaths } from "../core/paths";
+import { formatSize } from "../core/format";
 import { ok } from "./shared";
+
+export { formatSize };
 
 function getPlatformOpener(target: string): CommandSpec {
   if (process.platform === "darwin") {
@@ -17,17 +20,6 @@ function getPlatformOpener(target: string): CommandSpec {
     };
   }
   return { command: "xdg-open", args: [target], stdout: "pipe", stderr: "pipe", display: `xdg-open ${target}` };
-}
-
-export function formatSize(bytes: number): string {
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
 }
 
 export function formatAge(date: Date, now = new Date()): string {

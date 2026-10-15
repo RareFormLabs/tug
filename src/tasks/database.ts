@@ -26,30 +26,6 @@ function postgresEnv(password: string): Record<string, string> {
   return { PGPASSWORD: password };
 }
 
-function mysqlDumpSpec(credentials: DatabaseCredentials, outputPath: string, label: string): CommandSpec {
-  return {
-    command:
-      `mysqldump --host=${shellQuote(credentials.host)} --port=${credentials.port} --user=${shellQuote(credentials.user)} --lock-tables=false --no-tablespaces --column-statistics=0 ${shellQuote(credentials.database)} | gzip > ${shellQuote(outputPath)}`,
-    shell: true,
-    env: mysqlEnv(credentials.password),
-    stdout: "pipe",
-    stderr: "pipe",
-    display: label,
-  };
-}
-
-function mysqlImportSpec(credentials: DatabaseCredentials, inputPath: string, label: string): CommandSpec {
-  return {
-    command:
-      `gzip -dc ${shellQuote(inputPath)} | mysql --host=${shellQuote(credentials.host)} --port=${credentials.port} --user=${shellQuote(credentials.user)} ${shellQuote(credentials.database)}`,
-    shell: true,
-    env: mysqlEnv(credentials.password),
-    stdout: "pipe",
-    stderr: "pipe",
-    display: label,
-  };
-}
-
 function mysqlClearSpec(credentials: DatabaseCredentials, label: string): CommandSpec {
   return {
     command: "mysql",
@@ -62,30 +38,6 @@ function mysqlClearSpec(credentials: DatabaseCredentials, label: string): Comman
       dropMysqlTablesSql,
     ],
     env: mysqlEnv(credentials.password),
-    stdout: "pipe",
-    stderr: "pipe",
-    display: label,
-  };
-}
-
-function postgresDumpSpec(credentials: DatabaseCredentials, outputPath: string, label: string): CommandSpec {
-  return {
-    command:
-      `pg_dump --clean --if-exists --no-owner --no-privileges --host=${shellQuote(credentials.host)} --port=${credentials.port} --username=${shellQuote(credentials.user)} ${shellQuote(credentials.database)} | gzip > ${shellQuote(outputPath)}`,
-    shell: true,
-    env: postgresEnv(credentials.password),
-    stdout: "pipe",
-    stderr: "pipe",
-    display: label,
-  };
-}
-
-function postgresImportSpec(credentials: DatabaseCredentials, inputPath: string, label: string): CommandSpec {
-  return {
-    command:
-      `gzip -dc ${shellQuote(inputPath)} | psql --host=${shellQuote(credentials.host)} --port=${credentials.port} --username=${shellQuote(credentials.user)} --dbname=${shellQuote(credentials.database)} --set ON_ERROR_STOP=on`,
-    shell: true,
-    env: postgresEnv(credentials.password),
     stdout: "pipe",
     stderr: "pipe",
     display: label,
@@ -119,16 +71,63 @@ function specToShellCommand(spec: CommandSpec): string {
   return [spec.command, ...((spec.args ?? []).map(shellQuote))].join(" ");
 }
 
-function dumpSpec(engine: DatabaseEngine, credentials: DatabaseCredentials, outputPath: string, label: string): CommandSpec {
-  return engine === "mysql"
-    ? mysqlDumpSpec(credentials, outputPath, label)
-    : postgresDumpSpec(credentials, outputPath, label);
+/**
+ * Make a pipeline fail when any part of it fails (say mysqldump dies halfway while
+ * gzip exits cleanly), so a truncated dump is never imported. Shells without
+ * pipefail skip it.
+ */
+const PIPEFAIL = "(set -o pipefail) 2>/dev/null && set -o pipefail;";
+
+function credentialsEnv(credentials: DatabaseCredentials): Record<string, string> {
+  return credentials.engine === "mysql" ? mysqlEnv(credentials.password) : postgresEnv(credentials.password);
 }
 
-function importSpec(engine: DatabaseEngine, credentials: DatabaseCredentials, inputPath: string, label: string): CommandSpec {
-  return engine === "mysql"
-    ? mysqlImportSpec(credentials, inputPath, label)
-    : postgresImportSpec(credentials, inputPath, label);
+/** A shell pipeline that writes a gzipped dump to stdout. */
+function dumpCommand(credentials: DatabaseCredentials): string {
+  const { host, port, user, database } = credentials;
+  const dump =
+    credentials.engine === "mysql"
+      ? `mysqldump --host=${shellQuote(host)} --port=${port} --user=${shellQuote(user)} --lock-tables=false --no-tablespaces --column-statistics=0 ${shellQuote(database)}`
+      : `pg_dump --clean --if-exists --no-owner --no-privileges --host=${shellQuote(host)} --port=${port} --username=${shellQuote(user)} ${shellQuote(database)}`;
+  return `${PIPEFAIL} ${dump} | gzip`;
+}
+
+/** A shell pipeline that imports a gzipped dump from `inputPath`, or from stdin. */
+function importCommand(credentials: DatabaseCredentials, inputPath?: string): string {
+  const { host, port, user, database } = credentials;
+  const source = inputPath ? `gzip -dc ${shellQuote(inputPath)}` : "gzip -dc";
+  const client =
+    credentials.engine === "mysql"
+      ? `mysql --host=${shellQuote(host)} --port=${port} --user=${shellQuote(user)} ${shellQuote(database)}`
+      : `psql --host=${shellQuote(host)} --port=${port} --username=${shellQuote(user)} --dbname=${shellQuote(database)} --set ON_ERROR_STOP=on`;
+  return `${PIPEFAIL} ${source} | ${client}`;
+}
+
+/** Dump a local database to a gzipped file, showing how much has been written. */
+function localDumpSpec(credentials: DatabaseCredentials, outputPath: string, label: string): CommandSpec {
+  return {
+    command: dumpCommand(credentials),
+    shell: true,
+    env: credentialsEnv(credentials),
+    stdoutFile: outputPath,
+    stderr: "pipe",
+    display: label,
+    progress: { kind: "stdoutBytes" },
+  };
+}
+
+/** Import a gzipped dump into a local database, with progress through the file. */
+function localImportSpec(credentials: DatabaseCredentials, inputPath: string, label: string): CommandSpec {
+  return {
+    command: importCommand(credentials),
+    shell: true,
+    env: credentialsEnv(credentials),
+    stdinFile: inputPath,
+    stdout: "pipe",
+    stderr: "pipe",
+    display: label,
+    progress: { kind: "stdinBytes" },
+  };
 }
 
 function clearSpec(engine: DatabaseEngine, credentials: DatabaseCredentials, label: string): CommandSpec {
@@ -145,7 +144,7 @@ function sshCommand(
 ): CommandSpec {
   const prefix = env
     ? `${Object.entries(env)
-        .map(([key, value]) => `${key}=${shellQuote(value ?? "")}`)
+        .map(([key, value]) => `export ${key}=${shellQuote(value ?? "")};`)
         .join(" ")} `
     : "";
   return {
@@ -162,33 +161,44 @@ function sshCommand(
   };
 }
 
-function rsyncCopyFromRemote(runtime: LoadedRuntime, from: string, to: string, label: string): CommandSpec {
-  return {
-    command: "rsync",
-    args: [
-      "--archive",
-      `--rsh=ssh -p ${runtime.config.remote.port}`,
-      `${runtime.config.remote.user}@${runtime.config.remote.host}:${from}`,
-      to,
-    ],
+function sshTarget(runtime: LoadedRuntime): string[] {
+  return ["-p", String(runtime.config.remote.port), `${runtime.config.remote.user}@${runtime.config.remote.host}`];
+}
+
+async function remoteFileSize(runtime: LoadedRuntime, remotePath: string): Promise<number | undefined> {
+  const result = await runtime.runner.run({
+    command: "ssh",
+    args: [...sshTarget(runtime), `wc -c < ${shellQuote(remotePath)}`],
     stdout: "pipe",
     stderr: "pipe",
+    allowFailure: true,
+  });
+  const size = Number.parseInt(result.stdout.trim(), 10);
+  return result.exitCode === 0 && Number.isFinite(size) ? size : undefined;
+}
+
+/** Stream a remote file over SSH into a local file, with a progress bar. */
+function downloadSpec(runtime: LoadedRuntime, remotePath: string, localPath: string, label: string): CommandSpec {
+  return {
+    command: "ssh",
+    args: [...sshTarget(runtime), `cat ${shellQuote(remotePath)}`],
+    stdoutFile: localPath,
+    stderr: "pipe",
     display: label,
+    progress: { kind: "stdoutBytes", total: () => remoteFileSize(runtime, remotePath) },
   };
 }
 
-function rsyncCopyToRemote(runtime: LoadedRuntime, from: string, to: string, label: string): CommandSpec {
+/** Stream a local file over SSH into a remote file, with a progress bar. */
+function uploadSpec(runtime: LoadedRuntime, localPath: string, remotePath: string, label: string): CommandSpec {
   return {
-    command: "rsync",
-    args: [
-      "--archive",
-      `--rsh=ssh -p ${runtime.config.remote.port}`,
-      from,
-      `${runtime.config.remote.user}@${runtime.config.remote.host}:${to}`,
-    ],
+    command: "ssh",
+    args: [...sshTarget(runtime), `cat > ${shellQuote(remotePath)}`],
+    stdinFile: localPath,
     stdout: "pipe",
     stderr: "pipe",
     display: label,
+    progress: { kind: "stdinBytes" },
   };
 }
 
@@ -298,7 +308,7 @@ export async function buildDatabaseCommands(
   const localTemp = path.resolve(session.tempDir, `${action}.sql.gz`);
   const remoteTemp = remoteTempPath(runtime, `${session.token}-${action}.sql.gz`);
   const remoteBackupTemp = remoteTempPath(runtime, `${session.token}-backup.sql.gz`);
-  const remoteEnv = remoteCreds.engine === "mysql" ? mysqlEnv(remoteCreds.password) : postgresEnv(remoteCreds.password);
+  const remoteEnv = credentialsEnv(remoteCreds);
 
   const ensureRemoteTmp = sshCommand(
     runtime,
@@ -313,28 +323,28 @@ export async function buildDatabaseCommands(
           sshCommand(
             runtime,
             `Dump remote database ${remoteCreds.database}`,
-            dumpSpec(remoteCreds.engine, remoteCreds, remoteTemp, "remote dump").command,
+            `${dumpCommand(remoteCreds)} > ${shellQuote(remoteTemp)}`,
             remoteEnv,
           ),
-          rsyncCopyFromRemote(runtime, remoteTemp, localTemp, "Download remote dump"),
+          downloadSpec(runtime, remoteTemp, localTemp, "Download remote dump"),
           sshCommand(runtime, "Remove remote dump", `rm -f ${shellQuote(remoteTemp)}`),
-          dumpSpec(localCreds.engine, localCreds, localBackup, `Back up local database ${localCreds.database}`),
+          localDumpSpec(localCreds, localBackup, `Back up local database ${localCreds.database}`),
           clearSpec(localCreds.engine, localCreds, "Clear local database"),
-          importSpec(localCreds.engine, localCreds, localTemp, "Import into local database"),
+          localImportSpec(localCreds, localTemp, "Import into local database"),
         ]
       : [
           ensureRemoteTmp,
-          dumpSpec(localCreds.engine, localCreds, localBackup, `Back up local database ${localCreds.database}`),
+          localDumpSpec(localCreds, localBackup, `Back up local database ${localCreds.database}`),
           sshCommand(
             runtime,
             `Back up remote database ${remoteCreds.database}`,
-            dumpSpec(remoteCreds.engine, remoteCreds, remoteBackupTemp, "backup remote database").command,
+            `${dumpCommand(remoteCreds)} > ${shellQuote(remoteBackupTemp)}`,
             remoteEnv,
           ),
-          rsyncCopyFromRemote(runtime, remoteBackupTemp, remoteBackup, "Download remote backup"),
+          downloadSpec(runtime, remoteBackupTemp, remoteBackup, "Download remote backup"),
           sshCommand(runtime, "Remove remote backup temp file", `rm -f ${shellQuote(remoteBackupTemp)}`),
-          dumpSpec(localCreds.engine, localCreds, localTemp, "Dump local database for upload"),
-          rsyncCopyToRemote(runtime, localTemp, remoteTemp, "Upload local dump"),
+          localDumpSpec(localCreds, localTemp, "Dump local database for upload"),
+          uploadSpec(runtime, localTemp, remoteTemp, "Upload local dump"),
           sshCommand(
             runtime,
             "Clear remote database",
@@ -344,7 +354,7 @@ export async function buildDatabaseCommands(
           sshCommand(
             runtime,
             "Import into remote database",
-            specToShellCommand(importSpec(remoteCreds.engine, remoteCreds, remoteTemp, "import remote database")),
+            importCommand(remoteCreds, remoteTemp),
             remoteEnv,
           ),
           sshCommand(runtime, "Remove remote upload", `rm -f ${shellQuote(remoteTemp)}`),
@@ -507,6 +517,7 @@ export async function prepare(runtime: LoadedRuntime, action: DatabaseAction): P
   const backupDir = relativeToProject(runtime, built.session.backupDir);
 
   return {
+    id: built.plan.id,
     title: built.plan.title,
     details:
       action === "pull"
@@ -553,13 +564,14 @@ export async function prepareRestore(runtime: LoadedRuntime, dumpPath: string): 
     target: "local",
     destructive: true,
     commands: [
-      dumpSpec(local.engine, local, safetyBackup, `Back up local database ${local.database}`),
+      localDumpSpec(local, safetyBackup, `Back up local database ${local.database}`),
       clearSpec(local.engine, local, "Clear local database"),
-      importSpec(local.engine, local, source, `Import ${path.basename(source)}`),
+      localImportSpec(local, source, `Import ${path.basename(source)}`),
     ],
   };
 
   return {
+    id: taskPlan.id,
     title: taskPlan.title,
     details: [
       `From  ${relativeToProject(runtime, source)}`,

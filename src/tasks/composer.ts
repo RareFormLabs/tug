@@ -11,6 +11,9 @@ import { ensureBackupSession, planBackupSession } from "../core/paths";
 import { shellQuote } from "../core/shell";
 import { ensureComposerEnabled, ensureTaskEnabled, executePlan, fileExists, ok } from "./shared";
 
+/** Composer sync is switched off for now: hidden from the menu and the CLI. */
+export const COMPOSER_TASKS_AVAILABLE = false;
+
 const composerFiles = ["composer.json", "composer.lock"] as const;
 
 async function backupLocalComposerFiles(runtime: LoadedRuntime, backupDir: string): Promise<void> {
@@ -108,6 +111,7 @@ export async function prepare(runtime: LoadedRuntime, action: ComposerAction): P
   const backupDir = path.relative(runtime.options.cwd, session.backupDir);
 
   return {
+    id: taskPlan.id,
     title: taskPlan.title,
     details:
       action === "pull"

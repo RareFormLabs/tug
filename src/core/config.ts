@@ -10,8 +10,9 @@ const configSchema = z.object({
     .object({
       name: z.string().optional(),
       disabled_tasks: z.array(z.string()).default([]),
+      sounds: z.boolean().default(true),
     })
-    .default({ disabled_tasks: [] }),
+    .default({ disabled_tasks: [], sounds: true }),
   remote: z.object({
     host: z.string().min(1),
     user: z.string().min(1),

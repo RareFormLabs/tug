@@ -49,18 +49,39 @@ export function lineSplitter(onLine: (line: string) => void): { push(text: strin
 }
 
 export async function runStep(runtime: LoadedRuntime, label: string, command: CommandSpec): Promise<CommandResult> {
-  return runtime.reporter.step(label, async (onLine) => {
+  return runtime.reporter.step(label, async (step) => {
+    const spec = command.progress;
+    let files = 0;
     const stdout = lineSplitter((line) => {
       const formatted = command.formatLine ? command.formatLine(line) : line;
-      if (formatted !== null) {
-        onLine(formatted);
+      if (formatted === null) {
+        return;
+      }
+      step.line(formatted);
+      if (spec?.kind === "lines") {
+        files += 1;
+        step.progress({ done: files, total: spec.total, unit: "files" });
       }
     });
-    const stderr = lineSplitter(onLine);
+    const stderr = lineSplitter((line) => step.line(line));
+
+    let onStdinBytes: ((bytes: number) => void) | undefined;
+    let onStdoutBytes: ((bytes: number) => void) | undefined;
+    if (spec?.kind === "stdinBytes" && command.stdinFile) {
+      const total = Bun.file(command.stdinFile).size;
+      onStdinBytes = (bytes) => step.progress({ done: bytes, total, unit: "bytes" });
+    } else if (spec?.kind === "stdoutBytes") {
+      // An unknown size just shows the running amount instead of a bar.
+      const total = await spec.total?.().catch(() => undefined);
+      onStdoutBytes = (bytes) => step.progress({ done: bytes, total, unit: "bytes" });
+    }
+
     try {
       return await runtime.runner.run(command, {
         onStdout: (text) => stdout.push(text),
         onStderr: (text) => stderr.push(text),
+        onStdinBytes,
+        onStdoutBytes,
       });
     } finally {
       stdout.flush();

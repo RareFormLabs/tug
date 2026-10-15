@@ -5,6 +5,7 @@ import { ensureGitignored } from "../src/core/config";
 import { findConfigPath, listBackups } from "../src/core/paths";
 import { MemoryReporter } from "../src/core/reporter";
 import { runPrepared } from "../src/cli/ui";
+import { prepare as prepareComposer } from "../src/tasks/composer";
 import { prepare as prepareDatabase } from "../src/tasks/database";
 import { parseItemizedChanges, prepare as prepareFolder } from "../src/tasks/folder";
 import { lineSplitter } from "../src/tasks/shared";
@@ -100,6 +101,7 @@ describe("rsync change preview", () => {
 
 describe("runPrepared", () => {
   const task = (executed: string[]): PreparedTask => ({
+    id: "databasePush",
     title: "Database push",
     details: [],
     confirm: { message: "Replace?", initialValue: false },
@@ -185,5 +187,55 @@ describe("project helpers", () => {
     splitter.push("ond\r\n\nthird");
     splitter.flush();
     expect(lines).toEqual(["first", "second", "third"]);
+  });
+});
+
+describe("push safety", () => {
+  const remoteEnv = async (spec: { command: string; args?: string[] }) =>
+    spec.command === "ssh" && spec.args?.at(-1)?.startsWith("cat ")
+      ? { exitCode: 0, stdout: 'DB_DRIVER="mysql"\nDB_DATABASE="production"\nDB_USER="remote"\n', stderr: "" }
+      : { exitCode: 0, stdout: "<f.st...... index.twig\n", stderr: "" };
+
+  // Every task that writes to the remote must ask first and default to "no",
+  // whether or not a preview ran.
+  test("every push asks for confirmation and defaults to no", async () => {
+    const cwd = await tempProject();
+    await writeProjectFile(cwd, ".env", 'DB_DRIVER="mysql"\nDB_DATABASE="craft"\nDB_USER="root"\n');
+    await writeProjectFile(cwd, "composer.json", "{}");
+    const runtime = createRuntime(cwd, config, new MockRunner(remoteEnv), { force: false });
+    const pushes = [
+      await prepareFolder(runtime, "push"),
+      await prepareFolder(runtime, "push", { preview: true }),
+      await prepareDatabase(runtime, "push"),
+      await prepareComposer(runtime, "push"),
+    ];
+    for (const task of pushes) {
+      expect(task.confirm?.initialValue).toBe(false);
+    }
+    expect(pushes[2]!.confirm?.message).toContain("REMOTE");
+  });
+
+  test("declining a push runs nothing", async () => {
+    const executed: string[] = [];
+    const runtime = createRuntime("/tmp/project", config, new MockRunner(), { force: false, interactive: true });
+    const task: PreparedTask = {
+      id: "databasePush",
+      title: "Database push",
+      details: [],
+      confirm: { message: "Replace?", initialValue: false },
+      execute: async () => {
+        executed.push("ran");
+        return { ok: true, summary: "done" };
+      },
+    };
+    // Simulate pressing Enter on the default answer.
+    const { mock } = await import("bun:test");
+    mock.module("@clack/prompts", () => ({
+      ...require("@clack/prompts"),
+      confirm: async (options: { initialValue: boolean }) => options.initialValue,
+    }));
+    const { runPrepared: run } = await import("../src/cli/ui");
+    expect(await run(runtime, task)).toBeNull();
+    expect(executed).toEqual([]);
   });
 });

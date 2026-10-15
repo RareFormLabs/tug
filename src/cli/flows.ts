@@ -8,10 +8,11 @@ import { inspectProject } from "../core/doctor";
 import { listBackups, resolveConfigPath } from "../core/paths";
 import { BunProcessRunner } from "../core/process";
 import { createLoadedRuntime } from "../core/runtime";
+import { playSound } from "../core/sound";
 import * as backupsTask from "../tasks/backups";
 import * as databaseTask from "../tasks/database";
 import type { DatabaseEngine, DoctorCheck, DoctorReport, LoadedRuntime, RuntimeOptions, TugConfig } from "../types";
-import { ask, runPrepared, ui } from "./ui";
+import { ask, runPrepared, ui, withEmoji } from "./ui";
 
 /**
  * Project checks (config, tools, SSH, remote tools) followed by database
@@ -39,8 +40,10 @@ export async function doctorFlow(options: RuntimeOptions): Promise<boolean> {
   const report = await runDoctor(options, (check) => ui.check(check));
   if (report.ok) {
     ui.success("Everything looks good.");
+    playSound("success");
   } else {
     ui.error("Some checks failed. Fix the items above and run Doctor again.");
+    playSound("error");
   }
   return report.ok;
 }
@@ -84,7 +87,7 @@ export async function backupsFlow(runtime: LoadedRuntime): Promise<void> {
   if (snapshots.length > shown.length) {
     lines.push(styleText("dim", `… and ${snapshots.length - shown.length} older`));
   }
-  ui.note(`Backups · ${snapshots.length} snapshot(s), ${backupsTask.formatSize(total)}`, lines);
+  ui.note(withEmoji("backups", `Backups · ${snapshots.length} snapshot(s), ${backupsTask.formatSize(total)}`), lines);
 
   const hasDumps = backupsTask.databaseDumps(snapshots).length > 0;
   const choice = await ask(
@@ -206,6 +209,7 @@ export async function initWizard(cwd: string, explicitPath?: string): Promise<st
   }
   await writeConfig(destination, config);
   ui.success(`Created ${path.relative(cwd, destination)}${detectedEngine ? ` (${engine} detected from .env)` : ""}.`);
+  playSound("success");
   if (await ensureGitignored(cwd)) {
     ui.info("Added .tug/ to .gitignore so database backups stay out of git.");
   }

@@ -46,6 +46,7 @@ export function buildFolderPushCommands(runtime: LoadedRuntime, dryRun = runtime
         const change = parseItemizedLine(folder, line);
         return change && formatChange(change);
       },
+      progress: { kind: "lines" as const },
     };
   });
 }
@@ -72,6 +73,7 @@ export function buildFolderPullCommands(runtime: LoadedRuntime, dryRun = runtime
         const change = parseItemizedLine(folder, line);
         return change && formatChange(change);
       },
+      progress: { kind: "lines" as const },
     };
   });
 }
@@ -191,6 +193,11 @@ export async function prepare(
   if (preview && !dryRun) {
     const changes = await previewChanges(runtime, action);
     changeCount = changes.length;
+    // The preview tells us how many files each folder will sync, so the run can show a bar.
+    taskPlan.commands = taskPlan.commands.map((command, index) => ({
+      ...command,
+      progress: { kind: "lines", total: changes.filter((change) => change.folder === folders[index]).length },
+    }));
     if (changes.length > 0) {
       details = [...details, "", ...describeChanges(changes)];
     }
@@ -208,7 +215,8 @@ export async function prepare(
 
   if (changeCount === 0) {
     return {
-      title: taskPlan.title,
+      id: taskPlan.id,
+    title: taskPlan.title,
       details,
       nothingToDo: action === "push" ? "Remote already matches local. Nothing to push." : "Local already matches remote. Nothing to pull.",
       execute,
@@ -216,6 +224,7 @@ export async function prepare(
   }
 
   return {
+    id: taskPlan.id,
     title: taskPlan.title,
     details,
     // Pulls never delete local files, so only pushes ask first.

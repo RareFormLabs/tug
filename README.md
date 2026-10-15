@@ -1,6 +1,6 @@
 # tug
 
-`tug` is a Bun + TypeScript CLI for common Craft CMS deployment workflows: file sync, database sync, composer file sync, backups, diagnostics, and remote shell access.
+`tug` is a Bun + TypeScript CLI for common Craft CMS deployment workflows: file sync, database sync, backups, diagnostics, and remote shell access.
 
 ## Requirements
 
@@ -45,8 +45,17 @@ from anywhere inside the project.
 - **Pull / push database** reads both `.env` files and checks the needed tools on
   both sides, then shows exactly which database replaces which. Both databases are
   backed up to `.tug/backups/<timestamp>/` before anything is replaced.
-- **Composer pull / push** backs up the files it is about to overwrite.
-- Confirmations for tasks that change the remote default to **No**.
+- Every push asks before changing the remote, and the answer defaults to **No**,
+  so pressing Enter by accident does nothing. Only `--yes` skips the question.
+
+While a task runs, each step shows a progress bar where tug can measure one:
+folder pushes count files against the preview, database downloads, uploads and
+local imports track bytes, and local dumps show how much has been written. Steps
+that run entirely on the server show a timer.
+
+On macOS, tug plays a short sound when it starts and when a task succeeds, fails,
+or has nothing to do. To turn the sounds off, set `sounds = false` under
+`[project]` in `tug.toml`, or set `TUG_SOUNDS=0`.
 
 Backups can be restored into the local database from the **Backups** menu or with
 `tug db restore`. `tug init` adds `.tug/` to an existing `.gitignore` so database
@@ -61,7 +70,6 @@ dumps stay out of git.
 - `tug db pull` / `tug db push`
 - `tug db restore [file]`: restore a `.sql.gz` backup into the local database
 - `tug db doctor`
-- `tug composer pull` / `tug composer push`
 - `tug shell`
 - `tug backups list` / `tug backups open`
 
@@ -77,3 +85,9 @@ bun run lint
 bun run typecheck
 bun test
 ```
+
+## Credits
+
+The emojis and sounds come from [swiff](https://github.com/burgerbuds/swiff) by
+Burger Buds (ISC license). The sounds are from
+[Emoji Sounds](https://icons8.com/sounds).

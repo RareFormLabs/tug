@@ -3,6 +3,7 @@
 import { styleText } from "node:util";
 import { defineCommand, runCommand, runMain, showUsage } from "citty";
 import { backupsCommand } from "./commands/backups";
+import { COMPOSER_TASKS_AVAILABLE } from "../tasks/composer";
 import { composerCommand } from "./commands/composer";
 import { dbCommand } from "./commands/db";
 import { doctorCommand } from "./commands/doctor";
@@ -11,34 +12,29 @@ import { initCommand } from "./commands/init";
 import { shellCommand } from "./commands/shell";
 import { optionsFromArgs, sharedArgs } from "./common";
 import { startInteractive } from "./menu";
-import { errorMessage } from "./ui";
+import { playSound } from "../core/sound";
+import { errorMessage, ui } from "./ui";
+
+const subCommands = {
+  init: initCommand,
+  doctor: doctorCommand,
+  folder: folderCommand,
+  db: dbCommand,
+  ...(COMPOSER_TASKS_AVAILABLE ? { composer: composerCommand } : {}),
+  shell: shellCommand,
+  backups: backupsCommand,
+};
 
 const main = defineCommand({
   meta: {
     name: "tug",
     version: "0.1.0",
-    description: "Sync folders, databases, and composer files between a Craft CMS project and its server.",
+    description: "Sync folders and databases between a Craft CMS project and its server.",
   },
   args: sharedArgs,
-  subCommands: {
-    init: initCommand,
-    doctor: doctorCommand,
-    folder: folderCommand,
-    db: dbCommand,
-    composer: composerCommand,
-    shell: shellCommand,
-    backups: backupsCommand,
-  },
+  subCommands,
   async run(context) {
-    const knownSubcommands = new Set([
-      "init",
-      "doctor",
-      "folder",
-      "db",
-      "composer",
-      "shell",
-      "backups",
-    ]);
+    const knownSubcommands = new Set(Object.keys(subCommands));
     const firstPositional = Array.isArray(context.args._)
       ? context.args._.find((value: unknown) => typeof value === "string")
       : undefined;
@@ -69,7 +65,12 @@ async function run(): Promise<void> {
       // Argument errors from citty: show usage like runMain would.
       await showUsage(main);
     }
-    console.error(styleText("red", `✗ ${errorMessage(error)}`));
+    if (process.stdout.isTTY) {
+      ui.error(errorMessage(error));
+      playSound("error");
+    } else {
+      console.error(styleText("red", `✗ ${errorMessage(error)}`));
+    }
     process.exit(1);
   }
 }

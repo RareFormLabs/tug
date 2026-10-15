@@ -1,7 +1,8 @@
 import path from "node:path";
 import { styleText } from "node:util";
 import { confirm, isCancel, log, note } from "@clack/prompts";
-import { formatDuration } from "../core/reporter";
+import { formatDuration } from "../core/format";
+import { playSound } from "../core/sound";
 import type { DoctorCheck, LoadedRuntime, PreparedTask, TaskResult } from "../types";
 
 /** Thrown when the user backs out of a prompt (Esc or Ctrl+C). */
@@ -22,6 +23,27 @@ export async function ask<T>(prompt: Promise<T>): Promise<Exclude<T, symbol>> {
 
 const fancy = (): boolean => Boolean(process.stdout.isTTY);
 
+/** Task emojis shown in the menu and task summaries. */
+export const taskEmoji: Record<string, string> = {
+  folderPull: "📂 ⏬",
+  folderPush: "📂 ⏫",
+  databasePull: "🥞 ⏬",
+  databasePush: "🥞 ⏫",
+  databaseRestore: "🥞 ⏪",
+  composerPull: "🎩",
+  composerPush: "🎩",
+  terminal: "🌐",
+  backups: "🗄️",
+  doctor: "💊",
+  quit: "👋",
+};
+
+/** Prefix a title with its task emoji in a terminal. */
+export function withEmoji(id: string, title: string): string {
+  const emoji = taskEmoji[id];
+  return fancy() && emoji ? `${emoji}  ${title}` : title;
+}
+
 export const ui = {
   note(title: string, lines: string[]): void {
     if (lines.length === 0) {
@@ -35,14 +57,14 @@ export const ui = {
   },
   info(message: string): void {
     if (fancy()) {
-      log.info(message);
+      log.message(message, { symbol: "💁" });
     } else {
       console.log(message);
     }
   },
   success(message: string): void {
     if (fancy()) {
-      log.success(message);
+      log.message(message, { symbol: "👌" });
     } else {
       console.log(message);
     }
@@ -56,7 +78,7 @@ export const ui = {
   },
   error(message: string): void {
     if (fancy()) {
-      log.error(message);
+      log.message(message, { symbol: "💩" });
     } else {
       console.error(message);
     }
@@ -85,9 +107,10 @@ export function errorMessage(error: unknown): string {
  * Returns null when there was nothing to do or the user declined.
  */
 export async function runPrepared(runtime: LoadedRuntime, task: PreparedTask): Promise<TaskResult | null> {
-  ui.note(task.title, task.details);
+  ui.note(withEmoji(task.id, task.title), task.details);
   if (task.nothingToDo) {
     ui.info(task.nothingToDo);
+    playSound("message");
     return null;
   }
 
@@ -100,7 +123,8 @@ export async function runPrepared(runtime: LoadedRuntime, task: PreparedTask): P
       initialValue: task.confirm.initialValue,
     });
     if (isCancel(proceed) || !proceed) {
-      ui.warn("Cancelled. Nothing was changed.");
+      ui.info("Cancelled. Nothing was changed.");
+      playSound("message");
       return null;
     }
   }
@@ -108,6 +132,7 @@ export async function runPrepared(runtime: LoadedRuntime, task: PreparedTask): P
   const started = Date.now();
   const result = await task.execute();
   ui.success(`${result.summary} ${styleText("dim", `(${formatDuration(Date.now() - started)})`)}`);
+  playSound("success");
   for (const artifact of result.artifacts ?? []) {
     ui.info(`Backup saved to ${path.relative(runtime.options.cwd, artifact) || artifact}`);
   }

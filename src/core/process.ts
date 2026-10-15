@@ -33,6 +33,43 @@ async function readStream(
   return text;
 }
 
+/** A readable stream of `filePath` that reports the running byte count as it is consumed. */
+function countingFileStream(filePath: string, onBytes?: (bytes: number) => void): ReadableStream<Uint8Array> {
+  let total = 0;
+  return Bun.file(filePath)
+    .stream()
+    .pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          total += chunk.byteLength;
+          onBytes?.(total);
+          controller.enqueue(chunk);
+        },
+      }),
+    );
+}
+
+/** Copy a binary stream into a file, reporting the running byte count. */
+async function writeStreamToFile(
+  stream: ReadableStream<Uint8Array> | null,
+  filePath: string,
+  onBytes?: (bytes: number) => void,
+): Promise<void> {
+  const writer = Bun.file(filePath).writer();
+  let total = 0;
+  try {
+    if (stream) {
+      for await (const chunk of stream) {
+        writer.write(chunk);
+        total += chunk.byteLength;
+        onBytes?.(total);
+      }
+    }
+  } finally {
+    await writer.end();
+  }
+}
+
 export class BunProcessRunner implements ProcessRunner {
   async run(spec: CommandSpec, hooks: CommandHooks = {}): Promise<CommandResult> {
     const selectedShell = process.env.SHELL ?? "/bin/sh";
@@ -43,25 +80,28 @@ export class BunProcessRunner implements ProcessRunner {
       typeof spec.stdin === "string" && spec.stdin !== "inherit" && spec.stdin !== "pipe"
         ? "pipe"
         : (spec.stdin ?? "pipe");
-    const stdoutMode = spec.stdout ?? "pipe";
+    const stdoutMode = spec.stdoutFile ? "pipe" : (spec.stdout ?? "pipe");
     const stderrMode = spec.stderr ?? "pipe";
 
     const child = Bun.spawn({
       cmd: command,
       cwd: spec.cwd,
       env: spec.env ? { ...process.env, ...spec.env } : process.env,
-      stdin: stdinMode,
+      stdin: spec.stdinFile ? countingFileStream(spec.stdinFile, hooks.onStdinBytes) : stdinMode,
       stdout: stdoutMode,
       stderr: stderrMode,
     });
 
-    if (typeof spec.stdin === "string" && stdinMode === "pipe" && child.stdin) {
+    if (!spec.stdinFile && typeof spec.stdin === "string" && stdinMode === "pipe" && child.stdin) {
       child.stdin.write(spec.stdin);
       child.stdin.end();
     }
 
+    const stdoutStream = stdoutMode === "pipe" ? (child.stdout ?? null) : null;
     const [stdout, stderr, exitCode] = await Promise.all([
-      readStream(stdoutMode === "pipe" ? (child.stdout ?? null) : null, hooks.onStdout),
+      spec.stdoutFile
+        ? writeStreamToFile(stdoutStream, spec.stdoutFile, hooks.onStdoutBytes).then(() => "")
+        : readStream(stdoutStream, hooks.onStdout),
       readStream(stderrMode === "pipe" ? (child.stderr ?? null) : null, hooks.onStderr),
       child.exited,
     ]);

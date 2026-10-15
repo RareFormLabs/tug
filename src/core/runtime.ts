@@ -3,6 +3,7 @@ import { loadRuntimeConfig } from "./config";
 import { findConfigPath } from "./paths";
 import { BunProcessRunner } from "./process";
 import { createReporter } from "./reporter";
+import { setSoundsEnabled } from "./sound";
 import type { LoadedRuntime, RuntimeOptions } from "../types";
 
 /**
@@ -20,6 +21,7 @@ export async function resolveProjectOptions(options: RuntimeOptions): Promise<Ru
 export async function createLoadedRuntime(options: RuntimeOptions): Promise<LoadedRuntime> {
   const resolved = await resolveProjectOptions(options);
   const config = await loadRuntimeConfig(resolved);
+  setSoundsEnabled(config.project.sounds ?? true);
   return {
     options: resolved,
     config,
