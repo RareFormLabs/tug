@@ -60,7 +60,11 @@ async function writeStreamToFile(
   try {
     if (stream) {
       for await (const chunk of stream) {
-        writer.write(chunk);
+        // A full buffer returns a Promise; waiting on it keeps large dumps out of memory.
+        const pending = writer.write(chunk);
+        if (pending instanceof Promise) {
+          await pending;
+        }
         total += chunk.byteLength;
         onBytes?.(total);
       }

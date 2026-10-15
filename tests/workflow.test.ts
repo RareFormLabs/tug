@@ -46,7 +46,7 @@ const config: TugConfig = {
 };
 
 describe("rsync change preview", () => {
-  test("parses new, changed, and deleted files and ignores attribute-only lines", () => {
+  test("parses new, changed, deleted, and attribute-only lines", () => {
     const output = [
       "<f+++++++++ index.twig",
       "<f.st...... _layout.twig",
@@ -58,6 +58,7 @@ describe("rsync change preview", () => {
     expect(parseItemizedChanges("templates", output)).toEqual([
       { folder: "templates", kind: "new", path: "index.twig" },
       { folder: "templates", kind: "changed", path: "_layout.twig" },
+      { folder: "templates", kind: "attributes", path: "partials/" },
       { folder: "templates", kind: "new", path: "blocks/" },
       { folder: "templates", kind: "deleted", path: "old.twig" },
     ]);
@@ -67,6 +68,7 @@ describe("rsync change preview", () => {
     const output = "*deleting old.twig\n.d..t.... ./\n<f+++++++ index.twig\n<f.st.... same.twig\n";
     expect(parseItemizedChanges("templates", output).map((change) => change.kind)).toEqual([
       "deleted",
+      "attributes",
       "new",
       "changed",
     ]);
@@ -84,6 +86,23 @@ describe("rsync change preview", () => {
     expect(task.details).toContain("- templates/old.twig");
     expect(task.confirm?.initialValue).toBe(false);
     expect(runner.calls).toHaveLength(1);
+  });
+
+  test("push preview still pushes when only permissions or timestamps differ", async () => {
+    const runner = new MockRunner(async () => ({ exitCode: 0, stdout: ".f...p..... index.twig\n", stderr: "" }));
+    const runtime = createRuntime("/tmp/project", config, runner, { force: false });
+    const task = await prepareFolder(runtime, "push", { preview: true });
+    expect(task.nothingToDo).toBeUndefined();
+    expect(task.details.at(-1)).toContain("1 with only permission or timestamp changes");
+  });
+
+  test("push preview never creates folders on the server", async () => {
+    const runner = new MockRunner();
+    const runtime = createRuntime("/tmp/project", config, runner, { force: false });
+    await prepareFolder(runtime, "push", { preview: true });
+    const previewArgs = runner.calls[0]!.args!;
+    expect(previewArgs).toContain("--dry-run");
+    expect(previewArgs.some((arg) => arg.startsWith("--rsync-path"))).toBe(false);
   });
 
   test("push preview with no differences has nothing to do", async () => {

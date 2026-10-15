@@ -35,7 +35,8 @@ export function buildFolderPushCommands(runtime: LoadedRuntime, dryRun = runtime
         ...(dryRun ? ["--dry-run"] : []),
         ...baseExcludeArgs(runtime.config.files.exclude),
         `--rsh=ssh -p ${runtime.config.remote.port}`,
-        `--rsync-path=mkdir -p ${shellQuote(remotePath)} && rsync`,
+        // Create the remote folder only on a real push, so a preview never changes the server.
+        ...(dryRun ? [] : [`--rsync-path=mkdir -p ${shellQuote(remotePath)} && rsync`]),
         `${path.resolve(runtime.options.cwd, folder)}/`,
         `${runtime.config.remote.user}@${runtime.config.remote.host}:${remoteFolder}`,
       ],
@@ -44,7 +45,7 @@ export function buildFolderPushCommands(runtime: LoadedRuntime, dryRun = runtime
       display: `Push ${folder}/`,
       formatLine: (line: string) => {
         const change = parseItemizedLine(folder, line);
-        return change && formatChange(change);
+        return change && isContentChange(change) ? formatChange(change) : null;
       },
       progress: { kind: "lines" as const },
     };
@@ -71,7 +72,7 @@ export function buildFolderPullCommands(runtime: LoadedRuntime, dryRun = runtime
       display: `Pull ${folder}/`,
       formatLine: (line: string) => {
         const change = parseItemizedLine(folder, line);
-        return change && formatChange(change);
+        return change && isContentChange(change) ? formatChange(change) : null;
       },
       progress: { kind: "lines" as const },
     };
@@ -80,17 +81,19 @@ export function buildFolderPullCommands(runtime: LoadedRuntime, dryRun = runtime
 
 export interface FolderChange {
   folder: string;
-  kind: "new" | "changed" | "deleted";
+  /** "attributes" means only permissions, timestamps, or ownership differ. */
+  kind: "new" | "changed" | "deleted" | "attributes";
   path: string;
 }
 
+/** Changes that touch file contents, as opposed to attribute-only updates. */
+export function isContentChange(change: FolderChange): boolean {
+  return change.kind !== "attributes";
+}
+
 /**
- * Parse `rsync --itemize-changes` output. Attribute-only updates (lines starting
- * with ".") are ignored since they don't change file contents.
- */
-/**
- * Parse one `rsync --itemize-changes` line. Attribute-only updates (codes starting
- * with ".") are ignored since they don't change file contents.
+ * Parse one `rsync --itemize-changes` line. Codes starting with "." mean the
+ * contents match but attributes such as permissions or timestamps will change.
  */
 export function parseItemizedLine(folder: string, line: string): FolderChange | null {
   const match = /^(\S+)\s+(.+)$/.exec(line.trimEnd());
@@ -105,6 +108,9 @@ export function parseItemizedLine(folder: string, line: string): FolderChange | 
     // GNU rsync prints 11-character codes, macOS openrsync 9; new items are all "+".
     return { folder, kind: /^..\++$/.test(code!) ? "new" : "changed", path: file! };
   }
+  if (/^\.[fdLDS]/.test(code!) && /[^.\s]/.test(code!.slice(2))) {
+    return { folder, kind: "attributes", path: file! };
+  }
   return null;
 }
 
@@ -115,7 +121,7 @@ export function parseItemizedChanges(folder: string, output: string): FolderChan
     .filter((change): change is FolderChange => change !== null);
 }
 
-const marks = { new: "+", changed: "~", deleted: "-" } as const;
+const marks = { new: "+", changed: "~", deleted: "-", attributes: "." } as const;
 
 function formatChange(change: FolderChange): string {
   return `${marks[change.kind]} ${path.posix.join(change.folder, change.path)}`;
@@ -127,12 +133,19 @@ export function describeChanges(changes: FolderChange[]): string[] {
   if (changes.length === 0) {
     return [];
   }
-  const lines = changes.slice(0, PREVIEW_LIMIT).map(formatChange);
-  if (changes.length > PREVIEW_LIMIT) {
-    lines.push(`… and ${changes.length - PREVIEW_LIMIT} more`);
+  // Attribute-only updates are counted but not listed, since folder timestamps alone can be noisy.
+  const content = changes.filter(isContentChange);
+  const lines = content.slice(0, PREVIEW_LIMIT).map(formatChange);
+  if (content.length > PREVIEW_LIMIT) {
+    lines.push(`… and ${content.length - PREVIEW_LIMIT} more`);
   }
   const count = (kind: FolderChange["kind"]): number => changes.filter((change) => change.kind === kind).length;
-  lines.push("", `${count("new")} new, ${count("changed")} changed, ${count("deleted")} deleted`);
+  const attributes = count("attributes");
+  const summary = `${count("new")} new, ${count("changed")} changed, ${count("deleted")} deleted`;
+  if (lines.length > 0) {
+    lines.push("");
+  }
+  lines.push(attributes > 0 ? `${summary}, ${attributes} with only permission or timestamp changes` : summary);
   return lines;
 }
 
@@ -196,7 +209,10 @@ export async function prepare(
     // The preview tells us how many files each folder will sync, so the run can show a bar.
     taskPlan.commands = taskPlan.commands.map((command, index) => ({
       ...command,
-      progress: { kind: "lines", total: changes.filter((change) => change.folder === folders[index]).length },
+      progress: {
+        kind: "lines",
+        total: changes.filter((change) => change.folder === folders[index] && isContentChange(change)).length,
+      },
     }));
     if (changes.length > 0) {
       details = [...details, "", ...describeChanges(changes)];
@@ -216,7 +232,7 @@ export async function prepare(
   if (changeCount === 0) {
     return {
       id: taskPlan.id,
-    title: taskPlan.title,
+      title: taskPlan.title,
       details,
       nothingToDo: action === "push" ? "Remote already matches local. Nothing to push." : "Local already matches remote. Nothing to pull.",
       execute,
