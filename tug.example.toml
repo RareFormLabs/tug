@@ -1,6 +1,7 @@
 [project]
 name = "my-craft-site"
 disabled_tasks = []
+sounds = true
 
 [remote]
 host = "example.com"

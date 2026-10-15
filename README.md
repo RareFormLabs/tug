@@ -1,11 +1,10 @@
 # tug
 
-`tug` is a Bun + TypeScript CLI/TUI for common Craft CMS deployment workflows: file sync, database sync, composer file sync, backups, diagnostics, and remote shell access.
+`tug` is a Bun + TypeScript CLI for common Craft CMS deployment workflows: file sync, database sync, backups, diagnostics, and remote shell access.
 
 ## Requirements
 
 - Bun 1.3+
-- Zig for OpenTUI development and builds
 - macOS-first support in v1
 - Runtime tools:
   - `ssh`
@@ -31,21 +30,53 @@ bun install
 bun run src/cli/main.ts
 ```
 
+Running `tug` with no arguments opens a menu of tasks. Pick one, review what it
+will change, confirm, and watch it run. Output stays in your normal terminal
+scrollback and you come back to the menu when it finishes. If the project has no
+`tug.toml` yet, tug offers to set one up.
+
+`tug` looks for `tug.toml` in the current folder and its parents, so it works
+from anywhere inside the project.
+
+### What each task does before changing anything
+
+- **Push folders** runs an rsync dry run first and lists every file that will be
+  created, changed, or deleted on the remote. Nothing is asked when nothing differs.
+- **Pull / push database** reads both `.env` files and checks the needed tools on
+  both sides, then shows exactly which database replaces which. Both databases are
+  backed up to `.tug/backups/<timestamp>/` before anything is replaced.
+- Every push asks before changing the remote, and the answer defaults to **No**,
+  so pressing Enter by accident does nothing. Only `--yes` skips the question.
+
+While a task runs, each step shows a progress bar where tug can measure one:
+folder pushes count files against the preview, database downloads, uploads and
+local imports track bytes, and local dumps show how much has been written. Steps
+that run entirely on the server show a timer.
+
+On macOS, tug plays a short sound when it starts and when a task succeeds, fails,
+or has nothing to do. To turn the sounds off, set `sounds = false` under
+`[project]` in `tug.toml`, or set `TUG_SOUNDS=0`.
+
+Backups can be restored into the local database from the **Backups** menu or with
+`tug db restore`. `tug init` adds `.tug/` to an existing `.gitignore` so database
+dumps stay out of git.
+
 ## Commands
 
-- `tug`
-- `tug init`
-- `tug doctor`
+- `tug`: interactive menu
+- `tug init`: set up `tug.toml` (asks a few questions in a terminal)
+- `tug doctor`: check config, tools, SSH, and database settings
+- `tug folder pull` / `tug folder push`
+- `tug db pull` / `tug db push`
+- `tug db restore [file]`: restore a `.sql.gz` backup into the local database
 - `tug db doctor`
-- `tug folder pull`
-- `tug folder push`
-- `tug db pull`
-- `tug db push`
-- `tug composer pull`
-- `tug composer push`
 - `tug shell`
-- `tug backups list`
-- `tug backups open`
+- `tug backups list` / `tug backups open`
+
+Subcommands ask for confirmation in a terminal just like the menu. In scripts and
+CI, pass `--yes` (`-y`, or `--force`) to run destructive tasks without a prompt.
+Other flags: `--dry-run` (folder sync preview only), `--verbose` (show all command
+output), `--json` (doctor reports), `--config`, `--env-file`.
 
 ## Development
 
@@ -54,3 +85,9 @@ bun run lint
 bun run typecheck
 bun test
 ```
+
+## Credits
+
+The emojis and sounds come from [swiff](https://github.com/burgerbuds/swiff) by
+Burger Buds (ISC license). The sounds are from
+[Emoji Sounds](https://icons8.com/sounds).

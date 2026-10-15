@@ -1,7 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { MemoryLogger } from "../src/core/logging";
+import { MemoryReporter } from "../src/core/reporter";
+import { setSoundsEnabled } from "../src/core/sound";
 import type {
   CommandHooks,
   CommandResult,
@@ -11,6 +12,9 @@ import type {
   RuntimeOptions,
   TugConfig,
 } from "../src/types";
+
+// Keep test runs in a terminal quiet.
+setSoundsEnabled(false);
 
 export class MockRunner implements ProcessRunner {
   public calls: CommandSpec[] = [];
@@ -64,6 +68,6 @@ export function createRuntime(
     },
     config,
     runner,
-    logger: new MemoryLogger(),
+    reporter: new MemoryReporter(),
   };
 }

@@ -6,7 +6,7 @@ function createActionCommand(action: "list" | "open") {
   return defineCommand({
     meta: {
       name: action,
-      description: action === "list" ? "List backups." : "Open backups in Finder.",
+      description: action === "list" ? "List backup snapshots with their sizes." : "Open the backups folder.",
     },
     args: sharedArgs,
     async run(context) {
@@ -21,7 +21,7 @@ function createActionCommand(action: "list" | "open") {
 export const backupsCommand = defineCommand({
   meta: {
     name: "backups",
-    description: "Inspect tug backup snapshots.",
+    description: "Inspect backup snapshots (restore with `tug db restore`).",
   },
   subCommands: {
     list: createActionCommand("list"),

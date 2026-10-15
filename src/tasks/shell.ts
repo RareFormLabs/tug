@@ -1,6 +1,6 @@
 import type { CommandSpec, LoadedRuntime, TaskPlan, TaskResult } from "../types";
 import { shellQuote } from "../core/shell";
-import { executePlan, ok } from "./shared";
+import { ensureTaskEnabled, ok } from "./shared";
 
 export function buildShellCommand(runtime: LoadedRuntime): CommandSpec {
   const remoteAppPath = shellQuote(runtime.config.remote.app_path);
@@ -21,6 +21,7 @@ export function buildShellCommand(runtime: LoadedRuntime): CommandSpec {
 }
 
 export async function plan(runtime: LoadedRuntime): Promise<TaskPlan> {
+  ensureTaskEnabled(runtime.config, "terminal");
   return {
     id: "terminal",
     title: "Remote shell",
@@ -31,12 +32,13 @@ export async function plan(runtime: LoadedRuntime): Promise<TaskPlan> {
   };
 }
 
-export async function confirmMessage(): Promise<string> {
-  return "Open a remote shell session?";
-}
-
+/** Hand the terminal to an interactive SSH session in the remote app folder. */
 export async function run(runtime: LoadedRuntime): Promise<TaskResult> {
-  const taskPlan = await plan(runtime);
-  await executePlan(runtime, taskPlan);
-  return ok("Remote shell session exited.");
+  const command = (await plan(runtime)).commands[0]!;
+  const result = await runtime.runner.run({ ...command, allowFailure: true });
+  // ssh exits with the status of the last remote command, so only 255 means it failed to connect.
+  if (result.exitCode === 255) {
+    throw new Error(`Could not connect to ${runtime.config.remote.user}@${runtime.config.remote.host}.`);
+  }
+  return ok("Remote shell closed.");
 }

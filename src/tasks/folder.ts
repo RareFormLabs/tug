@@ -1,3 +1,4 @@
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { uniq } from "es-toolkit";
 import { shellQuote } from "../core/shell";
@@ -5,10 +6,10 @@ import type {
   CommandSpec,
   FolderAction,
   LoadedRuntime,
+  PreparedTask,
   TaskPlan,
-  TaskResult,
 } from "../types";
-import { ensureForceForDestructive, ensureTaskEnabled, executePlan, ok } from "./shared";
+import { ensureTaskEnabled, executePlan, ok } from "./shared";
 
 function baseExcludeArgs(extra: string[]): string[] {
   return uniq([".git", ".env", ".DS_Store", ...extra]).flatMap((pattern) => [
@@ -16,7 +17,11 @@ function baseExcludeArgs(extra: string[]): string[] {
   ]);
 }
 
-export function buildFolderPushCommands(runtime: LoadedRuntime): CommandSpec[] {
+function remoteLabel(runtime: LoadedRuntime): string {
+  return `${runtime.config.remote.user}@${runtime.config.remote.host}`;
+}
+
+export function buildFolderPushCommands(runtime: LoadedRuntime, dryRun = runtime.options.dryRun): CommandSpec[] {
   return runtime.config.files.push.map((folder) => {
     const remotePath = path.posix.join(runtime.config.remote.app_path, folder);
     const remoteFolder = shellQuote(`${remotePath}/`);
@@ -27,29 +32,28 @@ export function buildFolderPushCommands(runtime: LoadedRuntime): CommandSpec[] {
         "--compress",
         "--itemize-changes",
         "--delete",
-        ...(runtime.options.dryRun ? ["--dry-run"] : []),
+        ...(dryRun ? ["--dry-run"] : []),
         ...baseExcludeArgs(runtime.config.files.exclude),
         `--rsh=ssh -p ${runtime.config.remote.port}`,
-        `--rsync-path=mkdir -p ${shellQuote(remotePath)} && rsync`,
+        // Create the remote folder only on a real push, so a preview never changes the server.
+        ...(dryRun ? [] : [`--rsync-path=mkdir -p ${shellQuote(remotePath)} && rsync`]),
         `${path.resolve(runtime.options.cwd, folder)}/`,
         `${runtime.config.remote.user}@${runtime.config.remote.host}:${remoteFolder}`,
       ],
       stdout: "pipe" as const,
       stderr: "pipe" as const,
-      display: `rsync push ${folder}`,
+      display: `Push ${folder}/`,
+      formatLine: (line: string) => {
+        const change = parseItemizedLine(folder, line);
+        return change && isContentChange(change) ? formatChange(change) : null;
+      },
+      progress: { kind: "lines" as const },
     };
   });
 }
 
-export function buildFolderPullCommands(runtime: LoadedRuntime): CommandSpec[] {
-  const mkdirCommands = runtime.options.dryRun ? [] : runtime.config.files.pull.map((folder) => ({
-    command: "mkdir",
-    args: ["-p", path.resolve(runtime.options.cwd, folder)],
-    stdout: "pipe" as const,
-    stderr: "pipe" as const,
-    display: `mkdir -p ${folder}`,
-  }));
-  const rsyncCommands = runtime.config.files.pull.map((folder) => {
+export function buildFolderPullCommands(runtime: LoadedRuntime, dryRun = runtime.options.dryRun): CommandSpec[] {
+  return runtime.config.files.pull.map((folder) => {
     const remotePath = path.posix.join(runtime.config.remote.app_path, folder);
     return {
       command: "rsync",
@@ -57,18 +61,109 @@ export function buildFolderPullCommands(runtime: LoadedRuntime): CommandSpec[] {
         "--archive",
         "--compress",
         "--itemize-changes",
-        ...(runtime.options.dryRun ? ["--dry-run"] : []),
+        ...(dryRun ? ["--dry-run"] : []),
         ...baseExcludeArgs(runtime.config.files.exclude),
         `--rsh=ssh -p ${runtime.config.remote.port}`,
-        `${runtime.config.remote.user}@${runtime.config.remote.host}:${shellQuote(`${remotePath}/`)}`,
+        `${remoteLabel(runtime)}:${shellQuote(`${remotePath}/`)}`,
         `${path.resolve(runtime.options.cwd, folder)}/`,
       ],
       stdout: "pipe" as const,
       stderr: "pipe" as const,
-      display: `rsync pull ${folder}`,
+      display: `Pull ${folder}/`,
+      formatLine: (line: string) => {
+        const change = parseItemizedLine(folder, line);
+        return change && isContentChange(change) ? formatChange(change) : null;
+      },
+      progress: { kind: "lines" as const },
     };
   });
-  return [...mkdirCommands, ...rsyncCommands];
+}
+
+export interface FolderChange {
+  folder: string;
+  /** "attributes" means only permissions, timestamps, or ownership differ. */
+  kind: "new" | "changed" | "deleted" | "attributes";
+  path: string;
+}
+
+/** Changes that touch file contents, as opposed to attribute-only updates. */
+export function isContentChange(change: FolderChange): boolean {
+  return change.kind !== "attributes";
+}
+
+/**
+ * Parse one `rsync --itemize-changes` line. Codes starting with "." mean the
+ * contents match but attributes such as permissions or timestamps will change.
+ */
+export function parseItemizedLine(folder: string, line: string): FolderChange | null {
+  const match = /^(\S+)\s+(.+)$/.exec(line.trimEnd());
+  if (!match) {
+    return null;
+  }
+  const [, code, file] = match;
+  if (code === "*deleting") {
+    return { folder, kind: "deleted", path: file! };
+  }
+  if (/^[<>ch][fdLDS]/.test(code!)) {
+    // GNU rsync prints 11-character codes, macOS openrsync 9; new items are all "+".
+    return { folder, kind: /^..\++$/.test(code!) ? "new" : "changed", path: file! };
+  }
+  if (/^\.[fdLDS]/.test(code!) && /[^.\s]/.test(code!.slice(2))) {
+    return { folder, kind: "attributes", path: file! };
+  }
+  return null;
+}
+
+export function parseItemizedChanges(folder: string, output: string): FolderChange[] {
+  return output
+    .split("\n")
+    .map((line) => parseItemizedLine(folder, line))
+    .filter((change): change is FolderChange => change !== null);
+}
+
+const marks = { new: "+", changed: "~", deleted: "-", attributes: "." } as const;
+
+function formatChange(change: FolderChange): string {
+  return `${marks[change.kind]} ${path.posix.join(change.folder, change.path)}`;
+}
+
+const PREVIEW_LIMIT = 30;
+
+export function describeChanges(changes: FolderChange[]): string[] {
+  if (changes.length === 0) {
+    return [];
+  }
+  // Attribute-only updates are counted but not listed, since folder timestamps alone can be noisy.
+  const content = changes.filter(isContentChange);
+  const lines = content.slice(0, PREVIEW_LIMIT).map(formatChange);
+  if (content.length > PREVIEW_LIMIT) {
+    lines.push(`… and ${content.length - PREVIEW_LIMIT} more`);
+  }
+  const count = (kind: FolderChange["kind"]): number => changes.filter((change) => change.kind === kind).length;
+  const attributes = count("attributes");
+  const summary = `${count("new")} new, ${count("changed")} changed, ${count("deleted")} deleted`;
+  if (lines.length > 0) {
+    lines.push("");
+  }
+  lines.push(attributes > 0 ? `${summary}, ${attributes} with only permission or timestamp changes` : summary);
+  return lines;
+}
+
+async function previewChanges(runtime: LoadedRuntime, action: FolderAction): Promise<FolderChange[]> {
+  const folders = action === "push" ? runtime.config.files.push : runtime.config.files.pull;
+  const commands = action === "push" ? buildFolderPushCommands(runtime, true) : buildFolderPullCommands(runtime, true);
+  return runtime.reporter.step(`Comparing local and ${runtime.config.remote.host}`, async () => {
+    const changes: FolderChange[] = [];
+    for (const [index, command] of commands.entries()) {
+      if (action === "pull") {
+        // A pull preview against a folder that doesn't exist locally yet would fail.
+        await mkdir(path.resolve(runtime.options.cwd, folders[index]!), { recursive: true });
+      }
+      const result = await runtime.runner.run(command);
+      changes.push(...parseItemizedChanges(folders[index]!, result.stdout));
+    }
+    return changes;
+  });
 }
 
 export async function plan(runtime: LoadedRuntime, action: FolderAction): Promise<TaskPlan> {
@@ -92,17 +187,67 @@ export async function plan(runtime: LoadedRuntime, action: FolderAction): Promis
   };
 }
 
-export async function confirmMessage(runtime: LoadedRuntime, action: FolderAction): Promise<string> {
-  return action === "push"
-    ? `Push ${runtime.config.files.push.length} folder(s) to ${runtime.config.remote.host}?`
-    : `Pull ${runtime.config.files.pull.length} folder(s) from ${runtime.config.remote.host}?`;
-}
-
-export async function run(runtime: LoadedRuntime, action: FolderAction): Promise<TaskResult> {
+/**
+ * Resolve a folder sync. When `preview` is set, a dry run first lists exactly
+ * which files will be created, changed, or deleted.
+ */
+export async function prepare(
+  runtime: LoadedRuntime,
+  action: FolderAction,
+  { preview = false }: { preview?: boolean } = {},
+): Promise<PreparedTask> {
   const taskPlan = await plan(runtime, action);
-  if (action === "push") {
-    ensureForceForDestructive(runtime, taskPlan);
+  const folders = action === "push" ? runtime.config.files.push : runtime.config.files.pull;
+  const direction = action === "push" ? `to ${runtime.config.remote.host}` : `from ${runtime.config.remote.host}`;
+  const dryRun = runtime.options.dryRun;
+
+  let details = [`${action === "push" ? "Push" : "Pull"} ${folders.join(", ")} ${direction}`];
+  let changeCount: number | null = null;
+  if (preview && !dryRun) {
+    const changes = await previewChanges(runtime, action);
+    changeCount = changes.length;
+    // The preview tells us how many files each folder will sync, so the run can show a bar.
+    taskPlan.commands = taskPlan.commands.map((command, index) => ({
+      ...command,
+      progress: {
+        kind: "lines",
+        total: changes.filter((change) => change.folder === folders[index] && isContentChange(change)).length,
+      },
+    }));
+    if (changes.length > 0) {
+      details = [...details, "", ...describeChanges(changes)];
+    }
   }
-  await executePlan(runtime, taskPlan);
-  return ok(`${taskPlan.title} finished successfully.`);
+
+  const execute = async () => {
+    if (action === "pull" && !dryRun) {
+      for (const folder of folders) {
+        await mkdir(path.resolve(runtime.options.cwd, folder), { recursive: true });
+      }
+    }
+    await executePlan(runtime, taskPlan);
+    return ok(dryRun ? "Dry run finished. No files were changed." : `${taskPlan.title} finished.`);
+  };
+
+  if (changeCount === 0) {
+    return {
+      id: taskPlan.id,
+      title: taskPlan.title,
+      details,
+      nothingToDo: action === "push" ? "Remote already matches local. Nothing to push." : "Local already matches remote. Nothing to pull.",
+      execute,
+    };
+  }
+
+  return {
+    id: taskPlan.id,
+    title: taskPlan.title,
+    details,
+    // Pulls never delete local files, so only pushes ask first.
+    confirm:
+      action === "push" && !dryRun
+        ? { message: `Push ${changeCount ?? "these"} change(s) to ${runtime.config.remote.host}?`, initialValue: false }
+        : undefined,
+    execute,
+  };
 }

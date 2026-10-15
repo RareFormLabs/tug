@@ -10,17 +10,18 @@ export const sharedArgs = {
     type: "string" as const,
     description: "Override local .env path",
   },
-  force: {
+  yes: {
     type: "boolean" as const,
-    description: "Skip confirmations for destructive tasks",
+    alias: ["y"],
+    description: "Skip confirmation prompts (needed for destructive tasks without a terminal; --force also works)",
   },
   "dry-run": {
     type: "boolean" as const,
-    description: "Print file sync changes without mutating files",
+    description: "Show which files a folder sync would change without changing them",
   },
   verbose: {
     type: "boolean" as const,
-    description: "Show extra output",
+    description: "Show all command output instead of the first lines",
   },
   json: {
     type: "boolean" as const,
@@ -33,7 +34,7 @@ export function optionsFromArgs(args: Record<string, unknown>): RuntimeOptions {
     cwd: process.cwd(),
     configPath: typeof args.config === "string" ? args.config : undefined,
     envFile: typeof args["env-file"] === "string" ? args["env-file"] : undefined,
-    force: Boolean(args.force),
+    force: Boolean(args.yes || args.force),
     dryRun: Boolean(args["dry-run"]),
     verbose: Boolean(args.verbose),
     json: Boolean(args.json),
@@ -52,7 +53,4 @@ export async function withRuntime<T>(
 
 export function printTaskResult(result: TaskResult): void {
   console.log(result.summary);
-  if (result.artifacts && result.artifacts.length > 0) {
-    console.log(`Artifacts:\n${result.artifacts.join("\n")}`);
-  }
 }

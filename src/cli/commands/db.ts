@@ -1,18 +1,22 @@
 import { defineCommand } from "citty";
 import * as databaseTask from "../../tasks/database";
-import { printTaskResult, sharedArgs, withRuntime } from "../common";
+import { sharedArgs, withRuntime } from "../common";
+import { restoreFlow } from "../flows";
+import { runPrepared } from "../ui";
 
 function createActionCommand(action: "pull" | "push") {
   return defineCommand({
     meta: {
       name: action,
-      description: `${action === "pull" ? "Pull" : "Push"} the configured database.`,
+      description:
+        action === "pull"
+          ? "Replace the local database with the remote one."
+          : "Replace the remote database with the local one.",
     },
     args: sharedArgs,
     async run(context) {
       await withRuntime(context.args, async (runtime) => {
-        const result = await databaseTask.run(runtime, action);
-        printTaskResult(result);
+        await runPrepared(runtime, await databaseTask.prepare(runtime, action));
       });
     },
   });
@@ -21,7 +25,7 @@ function createActionCommand(action: "pull" | "push") {
 export const dbCommand = defineCommand({
   meta: {
     name: "db",
-    description: "Run database sync tasks.",
+    description: "Sync, restore, and check databases.",
   },
   subCommands: {
     doctor: defineCommand({
@@ -46,5 +50,24 @@ export const dbCommand = defineCommand({
     }),
     pull: createActionCommand("pull"),
     push: createActionCommand("push"),
+    restore: defineCommand({
+      meta: {
+        name: "restore",
+        description: "Restore a .sql.gz backup into the local database (pick one when no file is given).",
+      },
+      args: {
+        file: {
+          type: "positional",
+          required: false,
+          description: "Path to a .sql.gz dump, e.g. .tug/backups/<snapshot>/local-before-pull.sql.gz",
+        },
+        ...sharedArgs,
+      },
+      async run(context) {
+        await withRuntime(context.args, async (runtime) => {
+          await restoreFlow(runtime, typeof context.args.file === "string" ? context.args.file : undefined);
+        });
+      },
+    }),
   },
 });
