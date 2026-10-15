@@ -103,6 +103,20 @@ function importCommand(credentials: DatabaseCredentials, inputPath?: string): st
   return `${PIPEFAIL} ${source} | ${client}`;
 }
 
+/**
+ * Check a gzipped dump is complete and readable. Runs before any step that clears
+ * a database, so a truncated or corrupt file fails while the data is still there.
+ */
+function verifyDumpSpec(inputPath: string, label: string): CommandSpec {
+  return {
+    command: "gzip",
+    args: ["-t", inputPath],
+    stdout: "pipe",
+    stderr: "pipe",
+    display: label,
+  };
+}
+
 /** Dump a local database to a gzipped file, showing how much has been written. */
 function localDumpSpec(credentials: DatabaseCredentials, outputPath: string, label: string): CommandSpec {
   return {
@@ -328,6 +342,7 @@ export async function buildDatabaseCommands(
           ),
           downloadSpec(runtime, remoteTemp, localTemp, "Download remote dump"),
           sshCommand(runtime, "Remove remote dump", `rm -f ${shellQuote(remoteTemp)}`),
+          verifyDumpSpec(localTemp, "Check downloaded dump"),
           localDumpSpec(localCreds, localBackup, `Back up local database ${localCreds.database}`),
           clearSpec(localCreds.engine, localCreds, "Clear local database"),
           localImportSpec(localCreds, localTemp, "Import into local database"),
@@ -345,6 +360,7 @@ export async function buildDatabaseCommands(
           sshCommand(runtime, "Remove remote backup temp file", `rm -f ${shellQuote(remoteBackupTemp)}`),
           localDumpSpec(localCreds, localTemp, "Dump local database for upload"),
           uploadSpec(runtime, localTemp, remoteTemp, "Upload local dump"),
+          sshCommand(runtime, "Check uploaded dump", `gzip -t ${shellQuote(remoteTemp)}`),
           sshCommand(
             runtime,
             "Clear remote database",
@@ -564,6 +580,7 @@ export async function prepareRestore(runtime: LoadedRuntime, dumpPath: string): 
     target: "local",
     destructive: true,
     commands: [
+      verifyDumpSpec(source, `Check ${path.basename(source)}`),
       localDumpSpec(local, safetyBackup, `Back up local database ${local.database}`),
       clearSpec(local.engine, local, "Clear local database"),
       localImportSpec(local, source, `Import ${path.basename(source)}`),

@@ -1,3 +1,4 @@
+import { rename, rm } from "node:fs/promises";
 import { joinCommand } from "./shell";
 import type {
   CommandHooks,
@@ -102,13 +103,33 @@ export class BunProcessRunner implements ProcessRunner {
     }
 
     const stdoutStream = stdoutMode === "pipe" ? (child.stdout ?? null) : null;
-    const [stdout, stderr, exitCode] = await Promise.all([
-      spec.stdoutFile
-        ? writeStreamToFile(stdoutStream, spec.stdoutFile, hooks.onStdoutBytes).then(() => "")
-        : readStream(stdoutStream, hooks.onStdout),
-      readStream(stderrMode === "pipe" ? (child.stderr ?? null) : null, hooks.onStderr),
-      child.exited,
-    ]);
+    // Stream into a ".partial" file and only give it its real name once the command
+    // succeeds, so an interrupted download never looks like a complete backup.
+    const partialFile = spec.stdoutFile ? `${spec.stdoutFile}.partial` : undefined;
+    let stdout: string;
+    let stderr: string;
+    let exitCode: number;
+    try {
+      [stdout, stderr, exitCode] = await Promise.all([
+        partialFile
+          ? writeStreamToFile(stdoutStream, partialFile, hooks.onStdoutBytes).then(() => "")
+          : readStream(stdoutStream, hooks.onStdout),
+        readStream(stderrMode === "pipe" ? (child.stderr ?? null) : null, hooks.onStderr),
+        child.exited,
+      ]);
+    } catch (error) {
+      if (partialFile) {
+        await rm(partialFile, { force: true });
+      }
+      throw error;
+    }
+    if (partialFile && spec.stdoutFile) {
+      if (exitCode === 0) {
+        await rename(partialFile, spec.stdoutFile);
+      } else {
+        await rm(partialFile, { force: true });
+      }
+    }
 
     const result = { exitCode, stdout, stderr };
     if (exitCode !== 0 && !spec.allowFailure) {
