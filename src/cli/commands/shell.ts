@@ -5,13 +5,12 @@ import { printTaskResult, sharedArgs, withRuntime } from "../common";
 export const shellCommand = defineCommand({
   meta: {
     name: "shell",
-    description: "Open a remote shell session.",
+    description: "Open a shell in the remote project folder.",
   },
   args: sharedArgs,
   async run(context) {
     await withRuntime(context.args, async (runtime) => {
-      const result = await shellTask.run(runtime);
-      printTaskResult(result);
+      printTaskResult(await shellTask.run(runtime));
     });
   },
 });

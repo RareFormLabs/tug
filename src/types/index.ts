@@ -64,6 +64,8 @@ export interface CommandSpec {
   stderr?: "inherit" | "pipe";
   display?: string;
   allowFailure?: boolean;
+  /** Rewrite an output line for display, or drop it by returning null. */
+  formatLine?: (line: string) => string | null;
 }
 
 export interface CommandHooks {
@@ -81,11 +83,9 @@ export interface ProcessRunner {
   run(spec: CommandSpec, hooks?: CommandHooks): Promise<CommandResult>;
 }
 
-export interface Logger {
-  add(line: string): void;
-  clear(): void;
-  snapshot(): string[];
-  subscribe(listener: (lines: string[]) => void): () => void;
+export interface Reporter {
+  /** Run one unit of work, showing progress and any output lines it emits. */
+  step<T>(label: string, work: (onLine: (line: string) => void) => Promise<T>): Promise<T>;
 }
 
 export interface TaskPlan {
@@ -101,6 +101,26 @@ export interface TaskResult {
   ok: boolean;
   summary: string;
   artifacts?: string[];
+}
+
+export interface TaskConfirmation {
+  message: string;
+  /** Default answer. Tasks that change the remote default to "no". */
+  initialValue: boolean;
+}
+
+/**
+ * A task whose inputs have been resolved and validated, ready to show the user
+ * what will happen before anything is changed.
+ */
+export interface PreparedTask {
+  title: string;
+  /** Lines describing what will change, shown before confirming. */
+  details: string[];
+  /** Set when the task would change nothing; the runner reports it and skips execution. */
+  nothingToDo?: string;
+  confirm?: TaskConfirmation;
+  execute(): Promise<TaskResult>;
 }
 
 export interface DoctorCheck {
@@ -129,18 +149,5 @@ export interface LoadedRuntime {
   options: RuntimeOptions;
   config: TugConfig;
   runner: ProcessRunner;
-  logger: Logger;
-}
-
-export interface TaskDescriptor {
-  id: string;
-  title: string;
-  description: string;
-  disabledBy?: "composer";
-  action?:
-    | FolderAction
-    | DatabaseAction
-    | ComposerAction
-    | BackupAction
-    | "shell";
+  reporter: Reporter;
 }

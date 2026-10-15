@@ -4,12 +4,12 @@ import type {
   CommandSpec,
   ComposerAction,
   LoadedRuntime,
+  PreparedTask,
   TaskPlan,
-  TaskResult,
 } from "../types";
-import { createBackupSession } from "../core/paths";
+import { ensureBackupSession, planBackupSession } from "../core/paths";
 import { shellQuote } from "../core/shell";
-import { ensureComposerEnabled, ensureForceForDestructive, executePlan, fileExists, ok } from "./shared";
+import { ensureComposerEnabled, ensureTaskEnabled, executePlan, fileExists, ok } from "./shared";
 
 const composerFiles = ["composer.json", "composer.lock"] as const;
 
@@ -33,7 +33,7 @@ function buildRemotePullCommands(runtime: LoadedRuntime): CommandSpec[] {
     ],
     stdout: "pipe",
     stderr: "pipe",
-    display: `rsync pull ${file}`,
+    display: `Pull ${file}`,
     allowFailure: index === 1,
   }));
 }
@@ -49,7 +49,7 @@ function buildRemoteBackupCommands(runtime: LoadedRuntime, backupDir: string): C
     ],
     stdout: "pipe",
     stderr: "pipe",
-    display: `backup remote ${file}`,
+    display: `Back up remote ${file}`,
     allowFailure: file === "composer.lock",
   }));
 }
@@ -65,7 +65,7 @@ function buildRemotePushCommands(runtime: LoadedRuntime): CommandSpec[] {
     ],
     stdout: "pipe",
     stderr: "pipe",
-    display: `rsync push ${file}`,
+    display: `Push ${file}`,
     allowFailure: file === "composer.lock",
   }));
 }
@@ -76,6 +76,7 @@ export async function plan(
   backupDir?: string,
 ): Promise<TaskPlan> {
   ensureComposerEnabled(runtime.config);
+  ensureTaskEnabled(runtime.config, action === "pull" ? "composerPull" : "composerPush");
   const commands =
     action === "pull"
       ? buildRemotePullCommands(runtime)
@@ -97,27 +98,32 @@ export async function plan(
   };
 }
 
-export async function confirmMessage(runtime: LoadedRuntime, action: ComposerAction): Promise<string> {
-  return action === "pull"
-    ? `Overwrite local composer files from ${runtime.config.remote.host}?`
-    : `Overwrite remote composer files on ${runtime.config.remote.host}?`;
-}
-
-export async function run(runtime: LoadedRuntime, action: ComposerAction): Promise<TaskResult> {
-  if (!runtime.options.force) {
-    throw new Error("Composer sync is destructive. Re-run with --force or use the interactive TUI.");
-  }
-  const session = await createBackupSession(runtime.options.cwd, runtime.config);
+export async function prepare(runtime: LoadedRuntime, action: ComposerAction): Promise<PreparedTask> {
+  const session = planBackupSession(runtime.options.cwd, runtime.config);
   const taskPlan = await plan(runtime, action, session.backupDir);
-  ensureForceForDestructive(runtime, taskPlan);
-  if (action === "pull") {
-    await backupLocalComposerFiles(runtime, session.backupDir);
-  } else {
-    const localComposer = path.resolve(runtime.options.cwd, "composer.json");
-    if (!(await fileExists(localComposer))) {
-      throw new Error("composer.json is required for composer push.");
-    }
+  const host = runtime.config.remote.host;
+  if (action === "push" && !(await fileExists(path.resolve(runtime.options.cwd, "composer.json")))) {
+    throw new Error("composer.json is required for composer push.");
   }
-  await executePlan(runtime, taskPlan);
-  return ok(`${taskPlan.title} finished successfully.`, [session.backupDir]);
+  const backupDir = path.relative(runtime.options.cwd, session.backupDir);
+
+  return {
+    title: taskPlan.title,
+    details:
+      action === "pull"
+        ? [`Copy composer.json and composer.lock from ${host} into this project.`, `Local copies are backed up to ${backupDir}/ first.`]
+        : [`Copy local composer.json and composer.lock to ${host}.`, `Remote copies are backed up to ${backupDir}/ first.`],
+    confirm:
+      action === "pull"
+        ? { message: "Overwrite local composer files?", initialValue: true }
+        : { message: `Overwrite composer files on ${host}?`, initialValue: false },
+    execute: async () => {
+      await ensureBackupSession(session);
+      if (action === "pull") {
+        await backupLocalComposerFiles(runtime, session.backupDir);
+      }
+      await executePlan(runtime, taskPlan);
+      return ok(`${taskPlan.title} finished.`, [session.backupDir]);
+    },
+  };
 }

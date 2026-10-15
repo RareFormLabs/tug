@@ -1,37 +1,22 @@
 import { defineCommand } from "citty";
-import { inspectProject } from "../../core/doctor";
-import { BunProcessRunner } from "../../core/process";
+import { resolveProjectOptions } from "../../core/runtime";
 import { optionsFromArgs, sharedArgs } from "../common";
+import { doctorFlow, runDoctor } from "../flows";
 
 export const doctorCommand = defineCommand({
   meta: {
     name: "doctor",
-    description: "Validate tug config, tools, and SSH reachability.",
+    description: "Check tug config, local tools, SSH access, and database settings.",
   },
   args: sharedArgs,
   async run(context) {
-    const options = optionsFromArgs(context.args);
-    const runner = new BunProcessRunner();
-    const report = await inspectProject(
-      options,
-      runner,
-      options.json
-        ? undefined
-        : (check) => {
-            const badge =
-              check.status === "pass" ? "PASS" : check.status === "warn" ? "WARN" : "FAIL";
-            console.log(`[${badge}] ${check.label}: ${check.message}`);
-          },
-    );
+    const options = await resolveProjectOptions(optionsFromArgs(context.args));
     if (options.json) {
+      const report = await runDoctor(options);
       console.log(JSON.stringify(report, null, 2));
-      if (!report.ok) {
-        process.exitCode = 1;
-      }
+      process.exitCode = report.ok ? 0 : 1;
       return;
     }
-    if (!report.ok) {
-      process.exitCode = 1;
-    }
+    process.exitCode = (await doctorFlow(options)) ? 0 : 1;
   },
 });

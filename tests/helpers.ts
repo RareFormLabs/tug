@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { MemoryLogger } from "../src/core/logging";
+import { MemoryReporter } from "../src/core/reporter";
 import type {
   CommandHooks,
   CommandResult,
@@ -64,6 +64,6 @@ export function createRuntime(
     },
     config,
     runner,
-    logger: new MemoryLogger(),
+    reporter: new MemoryReporter(),
   };
 }

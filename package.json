@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "description": "Craft CMS deployment and sync workflows in a Bun/OpenTUI CLI.",
+  "description": "Craft CMS deployment and sync workflows in a Bun CLI.",
   "bin": {
     "tug": "./src/cli/main.ts"
   },
@@ -15,7 +15,7 @@
     "doctor": "bun run src/cli/main.ts doctor"
   },
   "dependencies": {
-    "@opentui/core": "^0.1.87",
+    "@clack/prompts": "1.8.1",
     "citty": "^0.2.1",
     "dotenv": "^17.3.1",
     "es-toolkit": "^1.45.1",

@@ -60,10 +60,10 @@ describe("database orchestration", () => {
     });
     const runtime = createRuntime(cwd, createConfig("mysql"), runner);
     const built = await buildDatabaseCommands(runtime, "pull");
-    expect(built.plan.commands.some((command) => command.display === "import pulled database")).toBe(
+    expect(built.plan.commands.some((command) => command.display === "Import into local database")).toBe(
       true,
     );
-    expect(built.plan.commands.some((command) => command.display === "backup local database")).toBe(
+    expect(built.plan.commands.some((command) => command.display === "Back up local database craft")).toBe(
       true,
     );
   });
@@ -88,7 +88,7 @@ describe("database orchestration", () => {
     });
     const runtime = createRuntime(cwd, createConfig("postgres"), runner);
     const built = await buildDatabaseCommands(runtime, "push");
-    expect(built.plan.commands.some((command) => command.display === "upload local database dump")).toBe(
+    expect(built.plan.commands.some((command) => command.display === "Upload local dump")).toBe(
       true,
     );
     expect(

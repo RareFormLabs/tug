@@ -62,6 +62,36 @@ export function renderExampleConfig(): string {
   return stringify(exampleConfig);
 }
 
+export function renderConfig(config: TugConfig): string {
+  return stringify(configSchema.parse(config));
+}
+
+export async function writeConfig(destination: string, config: TugConfig): Promise<void> {
+  await writeFile(destination, renderConfig(config), "utf8");
+}
+
+/**
+ * Backups hold full database dumps, so keep `.tug/` out of git. Only touches an
+ * existing .gitignore. Returns true when it added the entry.
+ */
+export async function ensureGitignored(cwd: string, entry = ".tug/"): Promise<boolean> {
+  const gitignorePath = path.resolve(cwd, ".gitignore");
+  let content: string;
+  try {
+    content = await readFile(gitignorePath, "utf8");
+  } catch {
+    return false;
+  }
+  const bare = entry.replace(/\/$/, "");
+  const lines = content.split(/\r?\n/).map((line) => line.trim());
+  if (lines.some((line) => [bare, `${bare}/`, `/${bare}`, `/${bare}/`].includes(line))) {
+    return false;
+  }
+  const separator = content.length === 0 || content.endsWith("\n") ? "" : "\n";
+  await writeFile(gitignorePath, `${content}${separator}${entry}\n`, "utf8");
+  return true;
+}
+
 export async function configExists(cwd: string, explicitPath?: string): Promise<boolean> {
   try {
     await access(resolveConfigPath(cwd, explicitPath));
@@ -74,8 +104,11 @@ export async function configExists(cwd: string, explicitPath?: string): Promise<
 export async function readConfig(cwd: string, explicitPath?: string): Promise<TugConfig> {
   const configPath = resolveConfigPath(cwd, explicitPath);
   const raw = await readFile(configPath, "utf8");
-  const parsed = parse(raw);
-  return configSchema.parse(parsed);
+  const result = configSchema.safeParse(parse(raw));
+  if (!result.success) {
+    throw new Error(`${path.relative(cwd, configPath) || configPath} is invalid:\n${z.prettifyError(result.error)}`);
+  }
+  return result.data;
 }
 
 export async function writeInitialConfig(
